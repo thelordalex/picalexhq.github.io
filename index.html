@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#07080a">
-<meta name="description" content="PicalexHQ - High Quality. Every Pixel. Optimize photos for Instagram, TikTok and Facebook right in your browser. Your photo never leaves your device.">
+<meta name="description" content="PicalexHQ - High Quality. Every Pixel. Optimize photos, add film frames, glitch effects and make collages right in your browser. Your photo never leaves your device.">
 <title>PicalexHQ - High Quality. Every Pixel.</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9b36c'/%3E%3Cpath d='M22 48V17h13a9.5 9.5 0 010 19H28' fill='none' stroke='%2307080a' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
@@ -21,10 +21,11 @@
 </header>
 
 <main>
+  <!-- HOME -->
   <section id="hero" class="hero">
-    <p class="eyebrow">Photo optimizer for social media</p>
+    <p class="eyebrow">Photo studio for social media</p>
     <h1>High Quality.<br><span>Every Pixel.</span></h1>
-    <p class="lead">Crop, enhance and export your photos for Instagram, TikTok and Facebook with studio-grade resampling. Nothing is uploaded, ever.</p>
+    <p class="lead">Crop, grade, add film frames and glitch effects, or build a collage. Studio-grade resampling, nothing uploaded, ever.</p>
 
     <label id="drop" class="drop" for="file">
       <input id="file" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
@@ -34,9 +35,14 @@
       <strong>Choose a photo</strong>
       <small>or drag &amp; drop it here · JPG, PNG, WEBP</small>
     </label>
+    <button id="goCollage" class="alt" type="button">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></svg>
+      Create a collage
+    </button>
     <p class="priv">🔒 Local processing — your photo is never uploaded.</p>
   </section>
 
+  <!-- EDITOR -->
   <section id="editor" class="editor" hidden>
     <div class="grid">
       <div class="stageCol">
@@ -80,13 +86,27 @@
 
         <section class="blk">
           <h2>Filter</h2>
-          <div id="filters" class="filters"></div>
+          <div id="filters" class="fgrid"></div>
           <div class="row" id="rowStrength"></div>
+        </section>
+
+        <section class="blk">
+          <h2>Effect</h2>
+          <div id="effects" class="fgrid"></div>
+          <div class="row" id="rowFx"></div>
         </section>
 
         <section class="blk">
           <div class="h2row"><h2>Adjust</h2><button id="resetAdj" class="link">Reset</button></div>
           <div id="sliders"></div>
+        </section>
+
+        <section class="blk">
+          <h2>Frame</h2>
+          <div id="frames" class="cards"></div>
+          <div id="capRow" hidden>
+            <input id="caption" class="textin" type="text" maxlength="28" placeholder="Caption (optional)" autocomplete="off">
+          </div>
         </section>
 
         <section class="blk">
@@ -106,8 +126,67 @@
 
         <div class="actions">
           <button id="dl" class="primary">Download optimized photo</button>
-          <button id="change" class="ghost">Change photo</button>
+          <div class="two">
+            <button id="change" class="ghost">Change photo</button>
+            <button id="toCollage" class="ghost">Make a collage</button>
+          </div>
           <input id="file2" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- COLLAGE -->
+  <section id="collage" class="editor" hidden>
+    <div class="grid">
+      <div class="stageCol">
+        <div class="stageBar">
+          <div class="pv"><span class="tag">COLLAGE</span><span id="cDims" class="dims">—</span></div>
+        </div>
+        <div class="stageWrap">
+          <div id="cStage" class="cstage"><canvas id="cCol"></canvas></div>
+        </div>
+        <p id="cNote" class="note">Tap a tile to add or replace a photo.</p>
+        <p class="priv small">🔒 Local processing — your photos are never uploaded.</p>
+      </div>
+
+      <aside class="panel">
+        <section class="blk">
+          <h2>Layout</h2>
+          <div id="layouts" class="lgrid"></div>
+        </section>
+
+        <section class="blk">
+          <h2>Shape</h2>
+          <div class="seg" id="cAr">
+            <button data-v="1:1">1:1</button>
+            <button data-v="4:5" class="on">4:5</button>
+            <button data-v="9:16">9:16</button>
+          </div>
+        </section>
+
+        <section class="blk">
+          <h2>Style</h2>
+          <div class="sl">
+            <div class="lab"><span>Spacing</span><output id="oGap">14</output></div>
+            <input id="cGap" type="range" min="0" max="60" step="1" value="14">
+          </div>
+          <div class="sl">
+            <div class="lab"><span>Rounded corners</span><output id="oRad">16</output></div>
+            <input id="cRad" type="range" min="0" max="80" step="1" value="16">
+          </div>
+          <div class="sl"><div class="lab"><span>Background</span></div></div>
+          <div id="swatches" class="sws"></div>
+        </section>
+
+        <div class="actions">
+          <button id="cGo" class="primary">Continue to editor</button>
+          <div class="two">
+            <button id="cAdd" class="ghost">Add photos</button>
+            <button id="cClear" class="ghost">Clear all</button>
+          </div>
+          <button id="cBack" class="ghost">Back</button>
+          <input id="fileCol" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
         </div>
       </aside>
     </div>
