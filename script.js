@@ -46,6 +46,7 @@ const PLATFORMS = [
 
 /* p: b c s (adjust units) | temp lift hl fade vig clarity sharp glow grain | split {sh,hi} = rgb offsets */
 const FILTERS = [
+  { id: 'none',      name: 'Original',   p: {} },
   { id: 'natural',    name: 'Natural',    p: { c: 2, s: 3, sharp: 8 } },
   { id: 'clean',      name: 'Clean',      p: { b: 3, c: 5, s: 2, temp: -1, lift: .15, clarity: .10, sharp: 14 } },
   { id: 'vivid',      name: 'Vivid',      p: { b: 1, c: 8, s: 16, sharp: 12 } },
@@ -97,7 +98,11 @@ const SLIDERS = [
   { k: 'warm',  label: 'Warmth',     min: -50, max: 50 },
   { k: 'vig',   label: 'Vignette',   min: 0,   max: 100 },
   { k: 'glow',  label: 'Glow',       min: 0,   max: 100 },
-  { k: 'grain', label: 'Film grain', min: 0,   max: 100 }
+  { k: 'grain',   label: 'Film grain', min: 0,   max: 100 },
+  { k: 'fade',    label: 'Fade',       min: 0,   max: 40 },
+  { k: 'clarity', label: 'Clarity',    min: 0,   max: 100 },
+  { k: 'hl',      label: 'Highlights', min: -40, max: 40 },
+  { k: 'sh',      label: 'Shadows',    min: -40, max: 40 }
 ];
 
 const QUALITY = {
@@ -115,6 +120,7 @@ const st = {
   effect: 'none', fxk: 70,
   frame: 'none', caption: '',
   b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0,
+  fade: 0, clarity: 0, hl: 0, sh: 0,
   fmt: 'jpg', quality: 'high',
   tab: 'result', fx: .5, fy: .5, cmp: 50
 };
@@ -208,9 +214,11 @@ function effective(adj, f, k) {
     s: clamp(adj.s + m(p.s), -100, 100),
     sharp: adj.sharp + m(p.sharp),
     temp: m(p.temp) + adj.warm * 0.2,
-    lift: m(p.lift), hl: m(p.hl), fade: m(p.fade),
+    lift: m(p.lift) + (adj.sh || 0) / 100 * 0.9,
+    hl: m(p.hl) + (adj.hl || 0) / 100 * 0.7,
+    fade: m(p.fade) + (adj.fade || 0) / 100 * 0.3,
     vig: m(p.vig) + adj.vig / 100 * 0.5,
-    clarity: m(p.clarity),
+    clarity: m(p.clarity) + (adj.clarity || 0) / 100 * 0.7,
     glow: m(p.glow) + adj.glow / 100,
     grain: m(p.grain) + adj.grain / 100 * 0.6,
     split: null
@@ -772,6 +780,7 @@ function syncUI() {
     $$('button', g).forEach(b => b.classList.toggle('on', b.dataset.v === st[k]));
   });
   $('#rowFx').hidden = st.effect === 'none';
+  $('#rowStrength').hidden = st.filter === 'none';
   $('#capRow').hidden = !curFrame().cap;
   const orig = st.platform === 'original';
   $('#cropBlk .seg').classList.toggle('dis', orig);
@@ -867,6 +876,8 @@ function adopt(work, name, note, platform) {
     small = mk(Math.round(tw * k), Math.round(th * k));
     drawScaled(small.getContext('2d'), work, 0, 0, tw, th, 0, 0, small.width, small.height);
   }
+  if (st.work && st.work !== work) st.work.width = st.work.height = 0;
+  if (st.small && st.small !== small && st.small !== st.work) st.small.width = st.small.height = 0;
   st.work = work; st.small = small; st.note = note || ''; st.name = name;
   if (platform) st.platform = platform;
   st.fx = st.fy = .5; beforeKey = '';
@@ -926,7 +937,8 @@ async function doExport() {
     }
     const a = document.createElement('a');
     const url = URL.createObjectURL(blob);
-    a.href = url; a.download = st.name + '-PicalexHQ.' + ext;
+    const tag = st.platform === 'original' ? '' : '-' + st.platform;
+    a.href = url; a.download = st.name + tag + '-PicalexHQ.' + ext;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (err) {
@@ -1091,6 +1103,7 @@ $$('#editor .seg').forEach(g => {
 $$('#tabs button').forEach(b => b.addEventListener('click', () => { setTab(b.dataset.tab); }));
 $('#resetAdj').addEventListener('click', () => {
   st.b = st.c = st.s = st.sharp = st.warm = st.vig = st.glow = st.grain = 0;
+  st.fade = st.clarity = st.hl = st.sh = 0;
   st.strength = 100; st.fxk = 70;
   buildSliders(); scheduleRender();
 });
