@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080a">
+<meta name="description" content="PicalexHQ - High Quality. Every Pixel. Optimize photos for Instagram, TikTok and Facebook right in your browser. Your photo never leaves your device.">
+<title>PicalexHQ - High Quality. Every Pixel.</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9b36c'/%3E%3Cpath d='M22 48V17h13a9.5 9.5 0 010 19H28' fill='none' stroke='%2307080a' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="glow" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="brand" href="./" aria-label="PicalexHQ">
+    <span class="logo" aria-hidden="true">P</span>
+    <span class="bname">Picalex<b>HQ</b></span>
+  </a>
+  <span class="pill">🔒 On-device</span>
+</header>
+
+<main>
+  <section id="hero" class="hero">
+    <p class="eyebrow">Photo optimizer for social media</p>
+    <h1>High Quality.<br><span>Every Pixel.</span></h1>
+    <p class="lead">Crop, enhance and export your photos for Instagram, TikTok and Facebook with studio-grade resampling. Nothing is uploaded, ever.</p>
+
+    <label id="drop" class="drop" for="file">
+      <input id="file" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+      <span class="drop-ic" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+      </span>
+      <strong>Choose a photo</strong>
+      <small>or drag &amp; drop it here · JPG, PNG, WEBP</small>
+    </label>
+    <p class="priv">🔒 Local processing — your photo is never uploaded.</p>
+  </section>
+
+  <section id="editor" class="editor" hidden>
+    <div class="grid">
+      <div class="stageCol">
+        <div class="stageBar">
+          <div class="pv"><span class="tag">PREVIEW</span><span id="dims" class="dims">—</span></div>
+          <div class="tabs" id="tabs" role="tablist">
+            <button data-tab="result" class="on" role="tab">Result</button>
+            <button data-tab="compare" role="tab">Before / After</button>
+            <button data-tab="move" id="tabMove" role="tab" hidden>Reposition</button>
+          </div>
+        </div>
+        <div class="stageWrap">
+          <div id="stage" class="stage">
+            <canvas id="cAfter"></canvas>
+            <canvas id="cBefore"></canvas>
+            <div id="handle" class="handle" aria-hidden="true">
+              <span class="knob"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span>
+            </div>
+            <span id="lblL" class="lbl l">Original</span>
+            <span id="lblR" class="lbl r">PicalexHQ Result</span>
+          </div>
+        </div>
+        <p id="note" class="note"></p>
+        <p class="priv small">🔒 Local processing — your photo is never uploaded.</p>
+      </div>
+
+      <aside class="panel">
+        <section class="blk">
+          <h2>Platform</h2>
+          <div id="platforms" class="cards"></div>
+        </section>
+
+        <section class="blk" id="cropBlk">
+          <h2>Crop mode</h2>
+          <div class="seg" data-key="crop">
+            <button data-v="cover" class="on">Fill Frame</button>
+            <button data-v="contain">Fit Image</button>
+          </div>
+          <p class="hint" id="cropHint">Fills the frame and trims the edges. Use Reposition to choose what stays.</p>
+        </section>
+
+        <section class="blk">
+          <h2>Filter</h2>
+          <div id="filters" class="filters"></div>
+          <div class="row" id="rowStrength"></div>
+        </section>
+
+        <section class="blk">
+          <div class="h2row"><h2>Adjust</h2><button id="resetAdj" class="link">Reset</button></div>
+          <div id="sliders"></div>
+        </section>
+
+        <section class="blk">
+          <h2>Export</h2>
+          <div class="seg" data-key="fmt">
+            <button data-v="jpg" class="on">JPG</button>
+            <button data-v="webp">WEBP</button>
+            <button data-v="png">PNG</button>
+          </div>
+          <div class="seg q" data-key="quality">
+            <button data-v="standard">Standard</button>
+            <button data-v="high" class="on">High</button>
+            <button data-v="ultra">Ultra</button>
+          </div>
+          <p class="hint" id="qHint"></p>
+        </section>
+
+        <div class="actions">
+          <button id="dl" class="primary">Download optimized photo</button>
+          <button id="change" class="ghost">Change photo</button>
+          <input id="file2" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>PicalexHQ · High Quality. Every Pixel.</span>
+  <span>No uploads · No tracking · No servers</span>
+</footer>
+
+<div id="busy" class="busy" hidden><div class="spin"></div><span id="busyTxt">Processing…</span></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
