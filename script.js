@@ -57,6 +57,35 @@ const PLATFORMS = [
   { id: 'fb-portrait', name: 'Facebook Portrait',       w: 1080, h: 1350 }
 ];
 
+/* ---- round 2: Size panel presets (W/H in px; long = long side, orig = photo pixels) ---- */
+const SIZE_PRESETS = [
+  { id: 'sz-orig',  name: 'Original size',    sub: 'Photo pixels',  orig: true },
+  { id: 'sz-story', name: 'Story / Reels',    sub: '1080 × 1920',   w: 1080, h: 1920 },
+  { id: 'sz-4x5',   name: 'Portrait 4:5',     sub: '1080 × 1350',   w: 1080, h: 1350 },
+  { id: 'sz-sq',    name: 'Square',           sub: '1080 × 1080',   w: 1080, h: 1080 },
+  { id: 'sz-tt',    name: 'TikTok',           sub: '1080 × 1920',   w: 1080, h: 1920 },
+  { id: 'sz-fb',    name: 'Facebook Portrait',sub: '1080 × 1350',   w: 1080, h: 1350 },
+  { id: 'sz-link',  name: 'Link preview',     sub: '1200 × 628',    w: 1200, h: 628 },
+  { id: 'sz-web',   name: 'Web 16:9',         sub: '1600 × 900',    w: 1600, h: 900 },
+  { id: 'sz-2k',    name: 'Large square',     sub: '2048 × 2048',   w: 2048, h: 2048 },
+  { id: 'sz-4096',  name: 'Long side 4096',   sub: 'Keeps proportions', long: 4096 },
+  { id: 'sz-4x6',   name: 'Print 4 × 6 in',   sub: '1200 × 1800 · 300 dpi', w: 1200, h: 1800 },
+  { id: 'sz-5x7',   name: 'Print 5 × 7 in',   sub: '1500 × 2100 · 300 dpi', w: 1500, h: 2100 },
+  { id: 'sz-8x10',  name: 'Print 8 × 10 in',  sub: '2400 × 3000 · 300 dpi', w: 2400, h: 3000 }
+];
+const MAX_SIDE = 8192;
+const MAX_OUT_PX = LOW_MEM ? 16e6 : 33e6;   // output cap: protects canvas memory on phones
+
+/* ---- round 2: AI background removal assets (the ONLY network request in the app, opt-in) ---- */
+const AI = {
+  cache: 'picalex-bg-v1',
+  model: 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx',
+  ort:   'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js',
+  wasm:  'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort-wasm-simd.wasm',
+  bytes: { model: 44403226, ort: 542655, wasm: 10551547 },
+  modelMB: 42, totalMB: 53
+};
+
 /* p: b c s (adjust units) | temp lift hl fade vig clarity sharp glow grain | split {sh,hi} = rgb offsets */
 const FILTERS = [
   { id: 'natural',    name: 'Natural',    p: { c: 2, s: 3, sharp: 8 } },
@@ -124,7 +153,11 @@ const st = {
   b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0, shadows: 0, highlights: 0, clarity: 0, fade: 0,
   srcId: 0, fast: false,
   fmt: 'jpg', quality: 'high',
-  tab: 'result', fx: .5, fy: .5, cmp: 50
+  tab: 'result', fx: .5, fy: .5, cmp: 50,
+  /* Size panel: custom = null (use the Format preset) or { W, H } */
+  custom: null, sizeFit: 'fill', sizeBg: '#000000', sizeKeep: true, sizeRatio: 1,
+  /* Remove background: strokes = Restore brush paths in source-normalised coords, sv = stroke version */
+  cut: { on: false, mode: 'simple', tol: 30, feather: 4, conn: true, brush: 8, fill: '#ffffff', strokes: [], sv: 0 }
 };
 let view = 'hero';
 
@@ -197,8 +230,15 @@ function backdrop(ctx, src, W, H) {
 
 function geometry(ctx, src, W, H, crop, fx, fy) {
   const sw = src.width, sh = src.height;
-  if (crop === 'cover' || (W === sw && H === sh)) {
+  if (crop === 'stretch') {
+    drawScaled(ctx, src, 0, 0, sw, sh, 0, 0, W, H);          // Size panel: distorts on purpose
+  } else if (crop === 'cover' || (W === sw && H === sh)) {
     coverDraw(ctx, src, W, H, fx, fy);
+  } else if (crop === 'fit-solid') {                         // Size panel: letterbox on a chosen colour
+    ctx.fillStyle = st.sizeBg; ctx.fillRect(0, 0, W, H);
+    const sc = Math.min(W / sw, H / sh);
+    const dw = Math.round(sw * sc), dh = Math.round(sh * sc);
+    drawScaled(ctx, src, 0, 0, sw, sh, Math.round((W - dw) / 2), Math.round((H - dh) / 2), dw, dh);
   } else {
     backdrop(ctx, src, W, H);
     const sc = Math.min(W / sw, H / sh);
@@ -808,9 +848,15 @@ function curFilter() { return FILTERS.find(f => f.id === st.filter); }
 function curFrame() { return FRAMES.find(f => f.id === st.frame); }
 function curEff() { return effective(st, curFilter(), st.strength / 100); }
 
+/* crop mode in force: the Size panel (when active) overrides the Format Fill/Fit switch */
+function effCrop() {
+  if (!st.custom) return st.crop;
+  return st.sizeFit === 'fill' ? 'cover' : st.sizeFit === 'stretch' ? 'stretch' : 'fit-solid';
+}
 function outSize() {
   const p = PLATFORMS.find(x => x.id === st.platform);
   if (!st.work) return { W: 0, H: 0 };
+  if (st.custom) return { W: st.custom.W, H: st.custom.H };
   if (p.id === 'original') return { W: st.work.width, H: st.work.height };
   return { W: p.w, H: p.h };
 }
@@ -889,11 +935,12 @@ function drawFrame(ctx, W, H, L, ph) {
 const geo = { key: '', c: null };
 /* geometry (crop + high-quality downscale) is the expensive part: cache it while only colour sliders move */
 function geoInto(ctx, src, w, h, cache) {
-  if (!cache) { geometry(ctx, src, w, h, st.crop, st.fx, st.fy); return; }
-  const key = [st.srcId, w, h, st.crop, st.fx.toFixed(5), st.fy.toFixed(5)].join('|');
+  const cm = effCrop();
+  if (!cache) { geometry(ctx, src, w, h, cm, st.fx, st.fy); return; }
+  const key = [st.srcId, w, h, cm, cm === 'fit-solid' ? st.sizeBg : '', st.fx.toFixed(5), st.fy.toFixed(5)].join('|');
   if (geo.key !== key || !geo.c) {
     if (!geo.c) geo.c = mk(w, h); else if (geo.c.width !== w || geo.c.height !== h) { geo.c.width = w; geo.c.height = h; }
-    geometry(geo.c.getContext('2d'), src, w, h, st.crop, st.fx, st.fy);
+    geometry(geo.c.getContext('2d'), src, w, h, cm, st.fx, st.fy);
     geo.key = key;
   }
   ctx.drawImage(geo.c, 0, 0);
@@ -901,14 +948,26 @@ function geoInto(ctx, src, w, h, cache) {
 
 function renderInto(ctx, src, W, H, raw, cache) {
   const L = layout(W, H);
+  const cut = (!raw && st.cut.on) ? maskFor(src) : null;      // Remove background: mask is applied after colour work
   if (!L.f) {
-    geoInto(ctx, src, W, H, cache);
-    if (!raw) post(ctx, W, H);
+    if (!cut) {
+      geoInto(ctx, src, W, H, cache);
+      if (!raw) post(ctx, W, H);
+      return;
+    }
+    const lay = scratch('cut', W, H), lc = lay.getContext('2d', { willReadFrequently: true });
+    lc.clearRect(0, 0, W, H);
+    geoInto(lc, src, W, H, cache);
+    post(lc, W, H);
+    applyMask(lc, cut, W, H);
+    ctx.drawImage(lay, 0, 0);
     return;
   }
   const ph = scratch('ph', L.iw, L.ih), pc = ph.getContext('2d', { willReadFrequently: true });
+  if (cut) pc.clearRect(0, 0, L.iw, L.ih);
   geoInto(pc, src, L.iw, L.ih, cache);
   if (!raw) post(pc, L.iw, L.ih);
+  if (cut) applyMask(pc, cut, L.iw, L.ih);
   drawFrame(ctx, W, H, L, ph);
 }
 
@@ -935,7 +994,7 @@ function render() {
   ctx.clearRect(0, 0, pw, ph);
   renderInto(ctx, st.small, pw, ph, false, true);
 
-  const key = [pw, ph, st.crop, st.fx.toFixed(4), st.fy.toFixed(4), st.frame, st.caption].join('|');
+  const key = [pw, ph, effCrop(), st.sizeBg, st.fx.toFixed(4), st.fy.toFixed(4), st.frame, st.caption].join('|');
   if (key !== beforeKey) {
     if (cBefore.width !== pw || cBefore.height !== ph) { cBefore.width = pw; cBefore.height = ph; }
     const bc = cBefore.getContext('2d');
@@ -945,7 +1004,10 @@ function render() {
   }
   stage.style.setProperty('--ar', (W / H).toFixed(5));
   dimsEl.textContent = W + ' × ' + H;
+  stage.classList.toggle('cut', st.cut.on);
   applyCompare();
+  sizeInfo();
+  scheduleEstimate();
 }
 
 function applyCompare() {
@@ -953,15 +1015,23 @@ function applyCompare() {
   cBefore.style.clipPath = 'inset(0 ' + (100 - st.cmp) + '% 0 0)';
 }
 
+/* how much the photo is enlarged to reach the output (1 = none) */
+function upFactor() {
+  if (!st.work) return 1;
+  const { W, H } = outSize();
+  const L = layout(W, H), cm = effCrop(), sw = st.work.width, sh = st.work.height;
+  if (cm === 'stretch') return Math.max(L.iw / sw, L.ih / sh);
+  return cm === 'cover' ? Math.max(L.iw / sw, L.ih / sh) : Math.min(L.iw / sw, L.ih / sh);
+}
 function updateNote() {
   const parts = [];
   if (st.tab === 'move') parts.push('Drag the photo to choose what stays visible.');
+  if (st.tab === 'restore') parts.push('Paint over the photo to bring removed areas back.');
   if (st.note) parts.push(st.note);
   if (st.work) {
-    const { W, H } = outSize();
-    const L = layout(W, H);
-    const sc = st.crop === 'cover' ? Math.max(L.iw / st.work.width, L.ih / st.work.height) : Math.min(L.iw / st.work.width, L.ih / st.work.height);
-    if (st.platform !== 'original' && sc > 1.02) parts.push('Source is ' + st.work.width + ' × ' + st.work.height + ' — it will be enlarged to fit this format.');
+    const sc = upFactor();
+    if ((st.platform !== 'original' || st.custom) && sc > 2) parts.push('Source is ' + st.work.width + ' × ' + st.work.height + ' and is enlarged ' + sc.toFixed(1) + '×. Detail will look soft.');
+    else if ((st.platform !== 'original' || st.custom) && sc > 1.02) parts.push('Source is ' + st.work.width + ' × ' + st.work.height + ' — it will be enlarged to fit this format.');
   }
   noteEl.textContent = parts.join(' ');
 }
@@ -1043,19 +1113,22 @@ function buildSliders() {
 }
 
 function syncUI() {
-  $$('#platforms .card').forEach(b => b.classList.toggle('on', b.dataset.id === st.platform));
+  $$('#platforms .card').forEach(b => b.classList.toggle('on', !st.custom && b.dataset.id === st.platform));
   $$('#frames .card').forEach(b => b.classList.toggle('on', b.dataset.id === st.frame));
   $$('#filters .fchip').forEach(b => b.classList.toggle('on', b.dataset.id === st.filter));
   $$('#effects .fchip').forEach(b => b.classList.toggle('on', b.dataset.id === st.effect));
   $$('#editor .seg').forEach(g => {
     const k = g.dataset.key;
+    if (!k) return;
     $$('button', g).forEach(b => b.classList.toggle('on', b.dataset.v === st[k]));
   });
   $('#rowFx').hidden = st.effect === 'none';
   $('#capRow').hidden = !curFrame().cap;
   const orig = st.platform === 'original';
-  $('#cropBlk .seg').classList.toggle('dis', orig);
-  $('#cropHint').textContent = orig
+  $('#cropBlk .seg').classList.toggle('dis', orig || !!st.custom);
+  $('#cropHint').textContent = st.custom
+    ? 'The Size panel is active and controls fit.'
+    : orig
     ? 'Original keeps your photo exactly as framed.'
     : st.crop === 'cover'
       ? 'Fills the frame and trims the edges. Use Reposition to choose what stays.'
@@ -1066,9 +1139,11 @@ function syncUI() {
     ? 'PNG is lossless — quality levels do not apply. Files can be large.'
     : { standard: 'Standard — smaller file size.', high: 'High — recommended for social media.', ultra: 'Ultra — maximum available quality, larger file.' }[st.quality];
   const mv = $('#tabMove');
-  const canMove = st.crop === 'cover' && trims();
+  const canMove = effCrop() === 'cover' && trims();
   mv.hidden = !canMove;
   if (!canMove && st.tab === 'move') setTab('result');
+  syncSizeUI();
+  syncCutUI();
 }
 
 function setTab(t) {
@@ -1076,20 +1151,24 @@ function setTab(t) {
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   stage.classList.toggle('cmp', t === 'compare');
   stage.classList.toggle('move', t === 'move');
+  stage.classList.toggle('restore', t === 'restore');
   updateNote();
+  syncCutUI();
 }
 
 /* ================= stage interactions ================= */
 let drag = null;
 stage.addEventListener('pointerdown', e => {
-  if (st.tab !== 'compare' && st.tab !== 'move') return;
+  if (st.tab !== 'compare' && st.tab !== 'move' && st.tab !== 'restore') return;
   stage.setPointerCapture(e.pointerId);
   drag = { x: e.clientX, y: e.clientY, fx: st.fx, fy: st.fy };
   if (st.tab === 'compare') moveCmp(e);
+  if (st.tab === 'restore') brushStart(e);
 });
 stage.addEventListener('pointermove', e => {
   if (!drag) return;
   if (st.tab === 'compare') { moveCmp(e); return; }
+  if (st.tab === 'restore') { brushMove(e); return; }
   if (st.tab === 'move') {
     const r = stage.getBoundingClientRect();
     const sw = st.work.width, sh = st.work.height;
@@ -1102,7 +1181,7 @@ stage.addEventListener('pointermove', e => {
     scheduleFast();
   }
 });
-const endDrag = () => { drag = null; };
+const endDrag = () => { drag = null; brushEnd(); };
 stage.addEventListener('pointerup', endDrag);
 stage.addEventListener('pointercancel', endDrag);
 function moveCmp(e) {
@@ -1152,6 +1231,8 @@ function adopt(work, name, note, platform) {
   st.work = work; st.small = small; st.note = note || ''; st.name = name;
   if (platform) st.platform = platform;
   st.fx = st.fy = .5; beforeKey = '';
+  st.custom = null;                       // a new photo starts from the Format preset
+  resetCut();                             // and without a cut-out
   show('editor');
   syncUI(); setTab('result');
   render(); updateNote();
@@ -1193,7 +1274,7 @@ async function doExport() {
     const { W, H } = outSize();
     c = mk(W, H);
     const ctx = c.getContext('2d', { willReadFrequently: true });
-    if (st.fmt === 'jpg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); }
+    if (st.fmt === 'jpg') { ctx.fillStyle = st.cut.on ? st.cut.fill : '#fff'; ctx.fillRect(0, 0, W, H); }   // JPG has no alpha
     renderInto(ctx, st.work, W, H, false);
     const mime = MIME[st.fmt];
     const q = st.fmt === 'png' ? undefined : QUALITY[st.fmt][st.quality];
@@ -1206,7 +1287,7 @@ async function doExport() {
     } else {
       toast('Saved ' + W + ' × ' + H + ' · ' + fmtSize(blob.size));
     }
-    const fname = st.name + '-' + (SLUG[st.platform] || 'photo') + '-PicalexHQ.' + ext;
+    const fname = st.name + '-' + (st.custom ? st.custom.W + 'x' + st.custom.H : (SLUG[st.platform] || 'photo')) + (st.cut.on ? '-cutout' : '') + '-PicalexHQ.' + ext;
     const url = URL.createObjectURL(blob);
     if (/; wv\)/.test(navigator.userAgent)) {
       openSheet(url, blob, fname);                 // Android WebView often ignores a[download]
@@ -1221,6 +1302,7 @@ async function doExport() {
   } finally {
     if (c) { c.width = c.height = 0; }
     freeScratch();
+    freeFullMask();                       // the full-resolution mask is only needed during export
     busy(false);
   }
 }
@@ -1387,12 +1469,494 @@ async function colGo() {
   } finally { busy(false); }
 }
 
+/* ================= round 2: Size panel ================= */
+/* Output size lives in st.custom ({W,H}); null means "use the Format preset". Resampling is unchanged:
+   drawScaled() halves step by step and finishes with one high-quality draw. */
+const szW = $('#szW'), szH = $('#szH');
+const presetDims = p => {
+  if (!st.work) return { W: 0, H: 0 };
+  if (p.orig) return { W: st.work.width, H: st.work.height };
+  if (p.long) { const k = p.long / Math.max(st.work.width, st.work.height); return { W: Math.round(st.work.width * k), H: Math.round(st.work.height * k) }; }
+  return { W: p.w, H: p.h };
+};
+function setCustom(W, H) {
+  W = clamp(Math.round(W) || 0, 16, MAX_SIDE); H = clamp(Math.round(H) || 0, 16, MAX_SIDE);
+  if (W * H > MAX_OUT_PX) { const k = Math.sqrt(MAX_OUT_PX / (W * H)); W = Math.floor(W * k); H = Math.floor(H * k); toast('Size capped at ' + W + ' × ' + H + ' to protect your device memory.'); }
+  st.custom = { W, H };
+  syncUI(); updateNote(); scheduleRender();
+}
+function buildSizeUI() {
+  const box = $('#sizePresets');
+  box.innerHTML = '';
+  SIZE_PRESETS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'card'; b.dataset.id = p.id; b.type = 'button';
+    b.innerHTML = '<b></b><small></small>';
+    b.firstChild.textContent = p.name; b.lastChild.textContent = p.sub;
+    b.addEventListener('click', () => {
+      if (!st.work) return;
+      const d = presetDims(p);
+      st.sizeRatio = d.W / d.H; st.fx = st.fy = .5;
+      setCustom(d.W, d.H);
+      writeSizeFields();
+    });
+    box.appendChild(b);
+  });
+  const edit = which => {
+    const el = which === 'w' ? szW : szH;
+    const v = parseInt(el.value.replace(/\D/g, ''), 10);
+    if (!(v >= 16) || !st.work) return;                     // ignore half-typed numbers
+    const cur = outSize();
+    let W = cur.W, H = cur.H;
+    if (which === 'w') { W = v; if (st.sizeKeep) H = Math.round(v / st.sizeRatio); }
+    else { H = v; if (st.sizeKeep) W = Math.round(v * st.sizeRatio); }
+    if (!st.sizeKeep) st.sizeRatio = W / H;
+    setCustom(W, H);
+    const other = which === 'w' ? szH : szW;
+    const o = outSize();
+    other.value = which === 'w' ? o.H : o.W;
+  };
+  szW.addEventListener('input', () => edit('w'));
+  szH.addEventListener('input', () => edit('h'));
+  [szW, szH].forEach(el => el.addEventListener('change', writeSizeFields));
+  $('#szKeep').addEventListener('change', e => {
+    st.sizeKeep = e.target.checked;
+    if (st.sizeKeep && st.work) { const o = outSize(); st.sizeRatio = o.W / o.H; }
+  });
+  $$('#szSw button').forEach(b => b.addEventListener('click', () => { st.sizeBg = b.dataset.c; $('#szBg').value = st.sizeBg; syncUI(); scheduleRender(); }));
+  $('#szBg').addEventListener('input', e => { st.sizeBg = e.target.value; syncUI(); scheduleRender(); });
+}
+function writeSizeFields() {
+  const o = outSize();
+  szW.value = o.W || ''; szH.value = o.H || '';
+}
+function syncSizeUI() {
+  if (!st.work) return;
+  const o = outSize();
+  $$('#sizePresets .card').forEach(b => {
+    const p = SIZE_PRESETS.find(x => x.id === b.dataset.id), d = presetDims(p);
+    b.classList.toggle('on', !!st.custom && d.W === o.W && d.H === o.H);
+  });
+  if (document.activeElement !== szW && document.activeElement !== szH) writeSizeFields();
+  $('#szKeep').checked = st.sizeKeep;
+  $('#szBgRow').hidden = st.sizeFit !== 'fit';
+  $('#szWarn').hidden = st.sizeFit !== 'stretch';
+  $$('#szSw button').forEach(b => b.classList.toggle('on', b.dataset.c === st.sizeBg));
+  $('#szFitHint').textContent = st.sizeFit === 'fill'
+    ? 'Fill crops the edges so the frame is fully covered.'
+    : st.sizeFit === 'fit' ? 'Fit keeps the whole photo and fills the rest with a solid colour.' : '';
+  $('#szFit').parentNode.classList.toggle('dim', !st.custom);
+}
+const SZ_NOTE_ID = '#szNote';
+function sizeInfo() {
+  if (!st.work) return;
+  const { W, H } = outSize();
+  const mp = (W * H / 1e6).toFixed(1);
+  const est = estimate.bytes ? ' · about ' + fmtSize(estimate.bytes) + ' as ' + st.fmt.toUpperCase() : '';
+  const line = W + ' × ' + H + ' px · ' + mp + ' MP' + est;
+  $('#szInfo').textContent = line;
+  $('#expInfo').textContent = 'Output ' + line;
+  const up = upFactor();
+  const n = $(SZ_NOTE_ID);
+  if ((st.platform !== 'original' || st.custom) && up > 2) {
+    n.hidden = false;
+    n.textContent = 'Enlarged ' + up.toFixed(1) + '× from the ' + st.work.width + ' × ' + st.work.height + ' source. Beyond 2× the photo looks soft. A smaller size gives a sharper result.';
+  } else if ((st.platform !== 'original' || st.custom) && up > 1.02) {
+    n.hidden = false;
+    n.textContent = 'Enlarged ' + up.toFixed(1) + '× from the source. Fine detail may look slightly soft.';
+  } else n.hidden = true;
+}
+/* file size estimate: encode the preview once, scale by pixel count. A rough figure, labelled "about". */
+const estimate = { bytes: 0, key: '' };
+let estT = 0;
+function scheduleEstimate() { clearTimeout(estT); estT = setTimeout(runEstimate, 500); }
+async function runEstimate() {
+  if (!st.small || st.fast || view !== 'editor' || !cAfter.width) return;
+  const { W, H } = outSize(), pw = cAfter.width, ph = cAfter.height;
+  const key = [st.fmt, st.quality, W, H, st.srcId, st.filter, st.effect, st.frame].join('|');
+  try {
+    const q = st.fmt === 'png' ? undefined : QUALITY[st.fmt][st.quality];
+    const blob = await new Promise(r => cAfter.toBlob(r, MIME[st.fmt], q));
+    if (!blob) return;
+    estimate.bytes = blob.size * (W * H) / (pw * ph);
+    estimate.key = key;
+    sizeInfo();
+  } catch (_) { /* estimate is optional */ }
+}
+
+/* ================= round 2: Remove background ================= */
+/* Two modes.
+   SIMPLE (default): offline. Samples the border pixels, takes the most common colour as the background,
+   flood-fills from the border through pixels close to that colour, then feathers the edge.
+   AI (opt-in): downloads a segmentation model once (Cache API) and runs it in worker-bg.js.
+   NETWORK NOTE: AI mode is the only place this app makes a network request, and only after the user taps
+   "Use AI model". Your photo is never uploaded; only the model and the engine files are downloaded.
+   The mask is kept per resolution: preview size (st.small) while editing, full size (st.work) during export. */
+const cutM = { small: { key: '', sv: -1, base: null, c: null }, full: { key: '', sv: -1, base: null, c: null } };
+const ai = { worker: null, cv: null, srcId: -1, busy: false, gen: 0, calls: {}, n: 0, view: 'simple' };
+let brushSprite = null;
+
+function resetCut() {
+  const c = st.cut;
+  c.on = false; c.mode = 'simple'; c.strokes = []; c.sv++;
+  ai.cv = null; ai.srcId = -1; ai.view = 'simple';
+  stopAi();
+  [cutM.small, cutM.full].forEach(m => { for (const k of ['base', 'c']) if (m[k]) { m[k].width = m[k].height = 0; m[k] = null; } m.key = ''; });
+}
+function freeFullMask() {
+  const m = cutM.full;
+  for (const k of ['base', 'c']) if (m[k]) { m[k].width = m[k].height = 0; m[k] = null; }
+  m.key = '';
+  if (st.small === st.work) { cutM.small.key = ''; }   // small and full share one canvas when the photo is small
+}
+function stopAi() {
+  if (ai.worker) { try { ai.worker.terminate(); } catch (_) {} ai.worker = null; }
+  ai.calls = {};
+}
+
+/* ---- simple mode ---- */
+function estimateBg(d, w, h) {
+  const bw = Math.max(2, Math.round(Math.min(w, h) * 0.01));
+  const hist = new Uint32Array(4096);
+  const N = (w * h);
+  const stride = Math.max(1, Math.floor((2 * (w + h) * bw) / 24000));
+  let n = 0;
+  const add = (x, y) => { const i = (y * w + x) * 4; hist[((d[i] >> 4) << 8) | ((d[i + 1] >> 4) << 4) | (d[i + 2] >> 4)]++; n++; };
+  for (let y = 0; y < h; y += 1) {
+    const edgeRow = y < bw || y >= h - bw;
+    if (edgeRow) { for (let x = 0; x < w; x += stride) add(x, y); }
+    else for (let x = 0; x < bw; x += 1) { if ((x + y) % stride === 0) { add(x, y); add(w - 1 - x, y); } }
+  }
+  let best = 0, bi = 0;
+  for (let i = 0; i < 4096; i++) if (hist[i] > best) { best = hist[i]; bi = i; }
+  let r = 0, g = 0, b = 0, m = 0;
+  const visit = (x, y) => {
+    const i = (y * w + x) * 4, k = ((d[i] >> 4) << 8) | ((d[i + 1] >> 4) << 4) | (d[i + 2] >> 4);
+    if (k === bi) { r += d[i]; g += d[i + 1]; b += d[i + 2]; m++; }
+  };
+  for (let y = 0; y < h; y++) {
+    const edgeRow = y < bw || y >= h - bw;
+    if (edgeRow) { for (let x = 0; x < w; x += stride) visit(x, y); }
+    else for (let x = 0; x < bw; x += 1) { if ((x + y) % stride === 0) { visit(x, y); visit(w - 1 - x, y); } }
+  }
+  return m ? [r / m, g / m, b / m] : [d[0], d[1], d[2]];
+}
+function simpleAlpha(src, w, h) {
+  const c = st.cut;
+  const d = src.getContext('2d').getImageData(0, 0, w, h).data;
+  const bgc = estimateBg(d, w, h);
+  const thr = 4 + c.tol * 1.6;                              // colour distance (0-255 scale) that still counts as background
+  const lim = thr * thr * 9;
+  const br = bgc[0], bg = bgc[1], bb = bgc[2];
+  const near = i => { const dr = d[i] - br, dg = d[i + 1] - bg, db = d[i + 2] - bb; return 2 * dr * dr + 4 * dg * dg + 3 * db * db <= lim; };
+  const N = w * h;
+  const isBg = new Uint8Array(N);
+  if (!c.conn) {
+    for (let p = 0, i = 0; p < N; p++, i += 4) if (near(i)) isBg[p] = 1;
+  } else {
+    const stack = new Int32Array(N);
+    let sp = 0;
+    const seed = p => { if (!isBg[p] && near(p * 4)) { isBg[p] = 1; stack[sp++] = p; } };
+    for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+    while (sp) {
+      const p = stack[--sp], x = p % w;
+      if (x > 0) seed(p - 1);
+      if (x < w - 1) seed(p + 1);
+      if (p >= w) seed(p - w);
+      if (p < N - w) seed(p + w);
+    }
+  }
+  const a = new Uint8Array(N);
+  for (let p = 0; p < N; p++) a[p] = isBg[p] ? 0 : 255;
+  return a;
+}
+function aiAlpha(w, h) {
+  const t = mk(w, h), tc = t.getContext('2d');
+  drawScaled(tc, ai.cv, 0, 0, ai.cv.width, ai.cv.height, 0, 0, w, h);
+  const d = tc.getImageData(0, 0, w, h).data, N = w * h, a = new Uint8Array(N);
+  for (let p = 0, i = 3; p < N; p++, i += 4) a[p] = d[i];
+  t.width = t.height = 0;
+  return a;
+}
+function featherAlpha(a, w, h, r) {
+  if (r < 1) return a;
+  const N = w * h, b = new Uint8Array(N), c = new Uint8Array(N);
+  blurH(a, b, w, h, r); blurV(b, c, w, h, r);
+  blurH(c, b, w, h, r); blurV(b, c, w, h, r);
+  return c;
+}
+function alphaToCanvas(a, w, h) {
+  const c = mk(w, h), x = c.getContext('2d'), img = x.createImageData(w, h), d = img.data;
+  for (let p = 0, i = 0; p < a.length; p++, i += 4) { d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = a[p]; }
+  x.putImageData(img, 0, 0);
+  return c;
+}
+function paintStrokes(ctx, mw, mh) {
+  if (!brushSprite) {
+    brushSprite = mk(64, 64);
+    const x = brushSprite.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(.55, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+  }
+  ctx.imageSmoothingEnabled = true;
+  st.cut.strokes.forEach(s => {
+    const r = Math.max(1, s.r * mw), step = Math.max(1, r * 0.3);
+    let px = null, py = null;
+    for (let i = 0; i < s.p.length; i += 2) {
+      const x = s.p[i] * mw, y = s.p[i + 1] * mh;
+      if (px === null) { ctx.drawImage(brushSprite, x - r, y - r, 2 * r, 2 * r); }
+      else {
+        const dist = Math.hypot(x - px, y - py), n = Math.max(1, Math.ceil(dist / step));
+        for (let k = 1; k <= n; k++) { const t = k / n; ctx.drawImage(brushSprite, px + (x - px) * t - r, py + (y - py) * t - r, 2 * r, 2 * r); }
+      }
+      px = x; py = y;
+    }
+  });
+}
+/* mask canvas for a source canvas (preview-size or full-size); rebuilt only when its inputs change */
+function maskFor(src) {
+  const c = st.cut, w = src.width, h = src.height;
+  const m = src === st.small ? cutM.small : cutM.full;
+  const useAi = c.mode === 'ai' && ai.cv && ai.srcId === st.srcId;
+  const key = [st.srcId, w, h, useAi ? 'ai' + ai.gen : 'simple', useAi ? 0 : c.tol, useAi ? 0 : (c.conn ? 1 : 0), c.feather].join('|');
+  if (m.key !== key || !m.base) {
+    if (m.base) m.base.width = m.base.height = 0;
+    const raw = useAi ? aiAlpha(w, h) : simpleAlpha(src, w, h);
+    const a = featherAlpha(raw, w, h, Math.round(c.feather * Math.max(w, h) / 1600));
+    m.base = alphaToCanvas(a, w, h);
+    m.key = key; m.sv = -1;
+  }
+  if (m.sv !== c.sv || !m.c) {
+    if (!m.c) m.c = mk(w, h);
+    const x = m.c.getContext('2d');
+    x.clearRect(0, 0, w, h);
+    x.drawImage(m.base, 0, 0);
+    paintStrokes(x, w, h);
+    m.sv = c.sv;
+  }
+  return m.c;
+}
+/* draw the mask with the same crop geometry as the photo (no blurred backdrop: outside the photo stays transparent) */
+function applyMask(ctx, m, W, H) {
+  const t = scratch('cutm', W, H), tc = t.getContext('2d');
+  tc.clearRect(0, 0, W, H);
+  const cm = effCrop(), sw = m.width, sh = m.height;
+  if (cm === 'stretch') drawScaled(tc, m, 0, 0, sw, sh, 0, 0, W, H);
+  else if (cm === 'cover' || (W === sw && H === sh)) coverDraw(tc, m, W, H, st.fx, st.fy);
+  else {
+    const sc = Math.min(W / sw, H / sh), dw = Math.round(sw * sc), dh = Math.round(sh * sc);
+    drawScaled(tc, m, 0, 0, sw, sh, Math.round((W - dw) / 2), Math.round((H - dh) / 2), dw, dh);
+  }
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(t, 0, 0);
+  ctx.restore();
+}
+
+/* ---- Restore brush ---- */
+let curStroke = null;
+function stageToSrc(e) {
+  const r = stage.getBoundingClientRect();
+  const u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  const { W, H } = outSize(), L = layout(W, H);
+  const px = u * W - L.ix, py = v * H - L.iy;
+  const sw = st.work.width, sh = st.work.height, cm = effCrop();
+  let sx, sy, k;
+  if (cm === 'stretch') { sx = px / L.iw * sw; sy = py / L.ih * sh; k = sw / L.iw; }
+  else if (cm === 'cover') {
+    const ar = L.iw / L.ih; let cw = sw, ch = sh;
+    if (ar > sw / sh) ch = sw / ar; else cw = sh * ar;
+    sx = (sw - cw) * st.fx + px / L.iw * cw; sy = (sh - ch) * st.fy + py / L.ih * ch; k = cw / L.iw;
+  } else {
+    const sc = Math.min(L.iw / sw, L.ih / sh), dw = sw * sc, dh = sh * sc;
+    sx = (px - (L.iw - dw) / 2) / sc; sy = (py - (L.ih - dh) / 2) / sc; k = 1 / sc;
+  }
+  const rOut = st.cut.brush / 100 * W / 2;
+  return { x: sx / sw, y: sy / sh, r: rOut * k / sw };
+}
+function brushStart(e) {
+  if (!st.cut.on || !st.work) return;
+  const p = stageToSrc(e);
+  curStroke = { r: p.r, p: [p.x, p.y] };
+  st.cut.strokes.push(curStroke); st.cut.sv++;
+  scheduleFast();
+}
+function brushMove(e) {
+  if (!curStroke) return;
+  const p = stageToSrc(e), n = curStroke.p.length;
+  if (Math.hypot(p.x - curStroke.p[n - 2], p.y - curStroke.p[n - 1]) < curStroke.r * 0.25) return;
+  curStroke.p.push(p.x, p.y); st.cut.sv++;
+  scheduleFast();
+}
+function brushEnd() { curStroke = null; }
+
+/* ---- AI mode: download (opt-in), cache, worker ---- */
+async function openCache() { try { return ('caches' in self) ? await caches.open(AI.cache) : null; } catch (_) { return null; } }
+async function aiCached() {
+  const c = await openCache();
+  if (!c) return false;
+  try { return !!(await c.match(AI.model) && await c.match(AI.ort) && await c.match(AI.wasm)); } catch (_) { return false; }
+}
+async function fetchAsset(url, total, onBytes) {
+  const cache = await openCache();
+  if (cache) { try { const hit = await cache.match(url); if (hit) { const b = await hit.arrayBuffer(); onBytes(b.byteLength); return b; } } catch (_) {} }
+  const res = await fetch(url, { mode: 'cors', credentials: 'omit' });   // the only network request in the app
+  if (!res.ok) throw new Error('download ' + res.status);
+  const parts = []; let got = 0;
+  if (res.body && res.body.getReader) {
+    const rd = res.body.getReader();
+    for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onBytes(value.length); }
+  } else { const b = await res.arrayBuffer(); parts.push(new Uint8Array(b)); got = b.byteLength; onBytes(got); }
+  const buf = new Uint8Array(got); let o = 0;
+  parts.forEach(p => { buf.set(p, o); o += p.length; });
+  if (cache) { try { await cache.put(url, new Response(buf.buffer.slice(0), { headers: { 'content-type': 'application/octet-stream' } })); } catch (_) { /* cache full or blocked: it just downloads again next time */ } }
+  return buf.buffer;
+}
+function workerCall(msg, transfer) {
+  return new Promise((res, rej) => {
+    const id = ++ai.n;
+    ai.calls[id] = { res, rej };
+    ai.worker.postMessage(Object.assign({ id }, msg), transfer || []);
+  });
+}
+function aiStatus(t) { $('#bgAiInfo').textContent = t; }
+async function useAI() {
+  if (ai.busy || !st.work) return;
+  const prevMode = st.cut.mode;
+  ai.busy = true; syncCutUI();
+  const prog = $('#bgAiProg');
+  try {
+    if (!window.Worker) throw new Error('This browser has no Web Worker support.');
+    if (!ai.worker) {
+      const total = AI.bytes.model + AI.bytes.ort + AI.bytes.wasm;
+      let got = 0;
+      prog.hidden = false; prog.value = 0;
+      const on = n => { got += n; prog.value = Math.min(100, got / total * 100); aiStatus('Downloading ' + (got / 1048576).toFixed(0) + ' of ' + (total / 1048576).toFixed(0) + ' MB. Your photo stays on this device.'); };
+      const ort = await fetchAsset(AI.ort, AI.bytes.ort, on);
+      const wasm = await fetchAsset(AI.wasm, AI.bytes.wasm, on);
+      const model = await fetchAsset(AI.model, AI.bytes.model, on);
+      prog.hidden = true;
+      aiStatus('Starting the model…');
+      const w = new Worker('worker-bg.js');
+      ai.worker = w;
+      w.onmessage = ev => {
+        const m = ev.data, call = ai.calls[m.id];
+        if (!call) return;
+        delete ai.calls[m.id];
+        if (m.type === 'error') call.rej(new Error(m.message)); else call.res(m);
+      };
+      w.onerror = ev => { const all = ai.calls; ai.calls = {}; Object.keys(all).forEach(k => all[k].rej(new Error(ev.message || 'worker error'))); };
+      await workerCall({ type: 'init', ort, wasm, model }, [ort, wasm, model]);
+    }
+    aiStatus('Finding the subject. This can take several seconds on a phone.');
+    const S = 1024, t = scratch('aiin', S, S), tc = t.getContext('2d', { willReadFrequently: true });
+    tc.clearRect(0, 0, S, S);
+    drawScaled(tc, st.work, 0, 0, st.work.width, st.work.height, 0, 0, S, S);
+    const img = tc.getImageData(0, 0, S, S);
+    const r = await workerCall({ type: 'run', size: S, rgba: img.data.buffer }, [img.data.buffer]);
+    if (ai.cv) ai.cv.width = ai.cv.height = 0;
+    ai.cv = alphaToCanvas(new Uint8Array(r.alpha), S, S);
+    ai.srcId = st.srcId; ai.gen++;
+    st.cut.mode = 'ai'; st.cut.sv++;
+    aiStatus('');
+    toast('AI cut-out ready.');
+  } catch (err) {
+    st.cut.mode = 'simple'; ai.view = 'simple';
+    stopAi(); prog.hidden = true;
+    toast('The AI model could not run (' + String(err && err.message || err).slice(0, 80) + '). Using Simple mode instead.');
+  } finally {
+    ai.busy = false;
+    freeScratch();
+    syncUI(); scheduleRender(); updateNote();
+  }
+}
+
+/* ---- UI ---- */
+let cutDeb = 0;
+function cutChanged(fast) {
+  clearTimeout(cutDeb);
+  cutDeb = setTimeout(() => { st.cut.sv++; fast ? scheduleFast() : scheduleRender(); }, 90);
+}
+function buildCutUI() {
+  const box = $('#bgSliders');
+  box.innerHTML = '';
+  const c = st.cut;
+  const tol = slider('Tolerance', 0, 100, c.tol, v => String(v), v => { c.tol = v; cutChanged(true); });
+  tol.id = 'bgTolRow';
+  box.appendChild(tol);
+  box.appendChild(slider('Edge softness', 0, 16, c.feather, v => String(v), v => { c.feather = v; cutChanged(true); }));
+  box.appendChild(slider('Restore brush size', 2, 24, c.brush, v => v + '%', v => { c.brush = v; }));
+  $('#bgToggle').addEventListener('click', () => {
+    if (!st.work) return;
+    c.on = !c.on;
+    if (c.on) { if (!(st.small.width > 0)) return; }
+    else { if (st.tab === 'restore') setTab('result'); }
+    syncUI(); scheduleRender();
+  });
+  $$('#bgMode button').forEach(b => b.addEventListener('click', async () => {
+    if (b.dataset.m === 'simple') { c.mode = 'simple'; ai.view = 'simple'; c.sv++; }
+    else {
+      ai.view = 'ai';
+      if (ai.cv && ai.srcId === st.srcId) { c.mode = 'ai'; c.sv++; }
+      ai.cached = await aiCached();
+    }
+    syncUI(); scheduleRender();
+  }));
+  $('#bgAiGo').addEventListener('click', useAI);
+  $('#bgConn').addEventListener('change', e => { c.conn = e.target.checked; cutChanged(true); });
+  $('#bgRestore').addEventListener('click', () => {
+    if (st.tab === 'restore') { setTab('result'); }
+    else { setTab('restore'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    syncCutUI();
+  });
+  $('#bgUndo').addEventListener('click', () => { c.strokes.pop(); c.sv++; scheduleRender(); });
+  $('#bgClear').addEventListener('click', () => { c.strokes = []; c.sv++; scheduleRender(); });
+  $('#bgFill').addEventListener('input', e => { c.fill = e.target.value; });
+}
+function syncCutUI() {
+  const c = st.cut;
+  $('#bgToggle').textContent = c.on ? 'Keep background' : 'Remove background';
+  $('#bgToggle').setAttribute('aria-pressed', c.on ? 'true' : 'false');
+  $('#bgPanel').hidden = !c.on;
+  $('#tabRestore').hidden = !c.on;
+  if (!c.on) return;
+  const viewAi = ai.view === 'ai';
+  const aiLive = c.mode === 'ai' && ai.cv && ai.srcId === st.srcId;
+  $$('#bgMode button').forEach(b => b.classList.toggle('on', b.dataset.m === (viewAi ? 'ai' : 'simple')));
+  $('#bgAiBox').hidden = !viewAi;
+  $('#bgSimple').hidden = aiLive;
+  $('#bgTolRow').hidden = aiLive;
+  $('#bgAiGo').disabled = ai.busy;
+  $('#bgAiGo').textContent = ai.busy ? 'Working…' : aiLive ? 'Run AI again' : 'Use AI model';
+  if (viewAi && !ai.busy) {
+    $('#bgAiInfo').textContent = ai.cached
+      ? 'The model is already stored on this device (about ' + AI.modelMB + ' MB). Running it does not download anything again. Your photo is not uploaded.'
+      : 'Tapping Use AI model downloads a model file of about ' + AI.modelMB + ' MB, plus about ' + (AI.totalMB - AI.modelMB) + ' MB for the engine that runs it (' + AI.totalMB + ' MB in total). This happens once; the files are kept on this device. Your photo is not uploaded.';
+  }
+  $('#bgExplain').textContent = aiLive
+    ? 'AI model is active. It finds the subject on its own, so it copes with busy backgrounds. Hair and fur edges can still look rough; use Restore to fix them. The photo is processed on this device.'
+    : viewAi
+      ? 'Simple mode stays active until the AI model has run. Nothing is downloaded before you tap Use AI model.'
+      : 'Simple mode is active. It estimates the background colour from the photo edges, so it works best on plain, evenly lit backgrounds. Hair edges can be rough and similar colours inside the subject may be removed; use Restore to paint them back. Works offline.';
+  $('#bgRestore').textContent = st.tab === 'restore' ? 'Done restoring' : 'Restore brush';
+  $('#bgRestore').classList.toggle('on', st.tab === 'restore');
+  $('#bgUndo').disabled = !c.strokes.length; $('#bgClear').disabled = !c.strokes.length;
+  const jpg = st.fmt === 'jpg';
+  $('#bgFillRow').hidden = !jpg;
+  $('#bgFmtHint').textContent = jpg
+    ? 'JPG cannot keep transparency, so the removed area is filled with the colour above. Choose PNG or WEBP in Export to keep it transparent.'
+    : 'Exports with a transparent background (' + st.fmt.toUpperCase() + ').';
+}
+
 /* ================= wiring ================= */
 $$('#editor .seg').forEach(g => {
+  if (!g.dataset.key) return;               // segments without a data-key are wired by their own panel
   $$('button', g).forEach(b => b.addEventListener('click', () => {
     st[g.dataset.key] = b.dataset.v;
     syncUI();
-    if (g.dataset.key === 'crop') { updateNote(); scheduleRender(); }
+    if (g.dataset.key === 'crop' || g.dataset.key === 'sizeFit') { updateNote(); scheduleRender(); }
+    if (g.dataset.key === 'fmt') { sizeInfo(); scheduleEstimate(); }
   }));
 });
 $$('#tabs button').forEach(b => b.addEventListener('click', () => { setTab(b.dataset.tab); }));
@@ -1427,7 +1991,7 @@ window.addEventListener('drop', e => {
 });
 
 buildCards('#platforms', PLATFORMS, 'platform', p => p.id === 'original' ? 'Keep dimensions' : p.w + ' × ' + p.h,
-  () => { st.fx = st.fy = .5; syncUI(); scheduleRender(); updateNote(); });
+  () => { st.custom = null; st.fx = st.fy = .5; syncUI(); scheduleRender(); updateNote(); });
 buildCards('#frames', FRAMES, 'frame', p => p.desc,
   () => { st.fx = st.fy = .5; syncUI(); scheduleRender(); updateNote(); });
 buildChips('#filters', FILTERS, 'filter');
@@ -1435,6 +1999,8 @@ buildChips('#effects', EFFECTS, 'effect');
 $('#effects').classList.add('fold');
 $('#fxMore').addEventListener('click', e => { const f = $('#effects').classList.toggle('fold'); e.target.textContent = f ? 'Show all effects' : 'Show fewer'; });
 buildSliders();
+buildSizeUI();
+buildCutUI();
 syncUI();
 /* ---- public API for extras.js: add filters / effects without touching this file ---- */
 let pxT = 0;
