@@ -1,222 +1,156 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07080a">
-<meta name="description" content="PicalexHQ - High Quality. Every Pixel. Optimize photos, add film frames, glitch effects and make collages right in your browser. Your photo never leaves your device.">
-<title>PicalexHQ - High Quality. Every Pixel.</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9b36c'/%3E%3Cpath d='M22 48V17h13a9.5 9.5 0 010 19H28' fill='none' stroke='%2307080a' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>Picalex HQ — Photo Editor</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="glow" aria-hidden="true"></div>
 
-<header class="top">
-  <a class="brand" href="./" aria-label="PicalexHQ">
-    <span class="logo" aria-hidden="true">P</span>
-    <span class="bname">Picalex<b>HQ</b></span>
-  </a>
-  <span class="pill">🔒 On-device</span>
-</header>
-
-<main>
-  <!-- HOME -->
-  <section id="hero" class="hero">
-    <p class="eyebrow">Photo studio for social media</p>
-    <h1>High Quality.<br><span>Every Pixel.</span></h1>
-    <p class="lead">Crop, grade, add film frames and glitch effects, or build a collage. Studio-grade resampling, nothing uploaded, ever.</p>
-
-    <label id="drop" class="drop" for="file">
-      <input id="file" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
-      <span class="drop-ic" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
-      </span>
-      <strong>Choose a photo</strong>
-      <small>or drag &amp; drop it here · JPG, PNG, WEBP</small>
+<!-- ============ HERO ============ -->
+<section id="hero">
+  <div class="hero-in">
+    <h1>Picalex <span>HQ</span></h1>
+    <p class="tag">Studio-grade filters, effects, frames &amp; collage — sized perfectly for every social platform.</p>
+    <label class="dropzone" for="file">
+      <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5-9 9"/></svg>
+      <b>Tap to choose a photo</b>
+      <small>or drag &amp; drop anywhere · JPG / PNG / WEBP</small>
     </label>
-    <button id="goCollage" class="alt" type="button">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></svg>
-      Create a collage
-    </button>
-    <p class="priv">🔒 Local processing — your photo is never uploaded.</p>
+    <input id="file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+    <button id="goCollage" class="btn ghost">🧩 Collage maker</button>
+  </div>
+</section>
+
+<!-- ============ EDITOR ============ -->
+<main id="editor" hidden>
+  <header class="bar">
+    <button id="change" class="btn small">← Change</button>
+    <button id="toCollage" class="btn small ghost">🧩 Collage</button>
+    <button id="dl" class="btn small primary">Export ⬇</button>
+  </header>
+
+  <section id="stage">
+    <canvas id="cBefore"></canvas>
+    <canvas id="cAfter"></canvas>
+    <div id="handle"></div>
+    <div id="dims" class="pill"></div>
+    <p id="note"></p>
   </section>
 
-  <!-- EDITOR -->
-  <section id="editor" class="editor" hidden>
-    <div class="grid">
-      <div class="stageCol">
-        <div class="stageBar">
-          <div class="pv"><span class="tag">PREVIEW</span><span id="dims" class="dims">—</span></div>
-          <div class="tabs" id="tabs" role="tablist">
-            <button data-tab="result" class="on" role="tab">Result</button>
-            <button data-tab="compare" role="tab">Before / After</button>
-            <button data-tab="move" id="tabMove" role="tab" hidden>Reposition</button>
-          </div>
-        </div>
-        <div class="stageWrap">
-          <div id="stage" class="stage">
-            <canvas id="cAfter"></canvas>
-            <canvas id="cBefore"></canvas>
-            <div id="handle" class="handle" aria-hidden="true">
-              <span class="knob"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span>
-            </div>
-            <span id="lblL" class="lbl l">Original</span>
-            <span id="lblR" class="lbl r">PicalexHQ Result</span>
-          </div>
-        </div>
-        <p id="note" class="note"></p>
-        <p class="priv small">🔒 Local processing — your photo is never uploaded.</p>
+  <nav id="tabs">
+    <button data-tab="result" class="on">Result</button>
+    <button data-tab="compare">Compare</button>
+    <button data-tab="move" id="tabMove" hidden>Reposition</button>
+  </nav>
+
+  <section class="group">
+    <h2>Format</h2>
+    <div id="platforms" class="cards"></div>
+    <div id="cropBlk" class="rowline">
+      <div class="seg" data-key="crop">
+        <button data-v="cover" class="on">Fill</button>
+        <button data-v="fit">Fit</button>
       </div>
-
-      <aside class="panel">
-        <section class="blk">
-          <h2>Platform</h2>
-          <div id="platforms" class="cards"></div>
-        </section>
-
-        <section class="blk" id="cropBlk">
-          <h2>Crop mode</h2>
-          <div class="seg" data-key="crop">
-            <button data-v="cover" class="on">Fill Frame</button>
-            <button data-v="contain">Fit Image</button>
-          </div>
-          <p class="hint" id="cropHint">Fills the frame and trims the edges. Use Reposition to choose what stays.</p>
-        </section>
-
-        <section class="blk">
-          <h2>Filter</h2>
-          <div id="filters" class="fgrid"></div>
-          <div class="row" id="rowStrength"></div>
-        </section>
-
-        <section class="blk">
-          <h2>Effect</h2>
-          <div id="effects" class="fgrid"></div>
-          <button id="fxMore" class="link more" type="button">Show all effects</button>
-          <div class="row" id="rowFx"></div>
-        </section>
-
-        <section class="blk">
-          <div class="h2row"><h2>Adjust</h2><button id="resetAdj" class="link">Reset</button></div>
-          <div id="sliders"></div>
-        </section>
-
-        <section class="blk">
-          <h2>Fine tune</h2>
-          <div id="sliders2"></div>
-        </section>
-
-        <section class="blk">
-          <h2>Frame</h2>
-          <div id="frames" class="cards"></div>
-          <div id="capRow" hidden>
-            <input id="caption" class="textin" type="text" maxlength="28" placeholder="Caption (optional)" autocomplete="off">
-          </div>
-        </section>
-
-        <section class="blk">
-          <h2>Export</h2>
-          <div class="seg" data-key="fmt">
-            <button data-v="jpg" class="on">JPG</button>
-            <button data-v="webp">WEBP</button>
-            <button data-v="png">PNG</button>
-          </div>
-          <div class="seg q" data-key="quality">
-            <button data-v="standard">Standard</button>
-            <button data-v="high" class="on">High</button>
-            <button data-v="ultra">Ultra</button>
-          </div>
-          <p class="hint" id="qHint"></p>
-        </section>
-
-        <div class="actions">
-          <button id="dl" class="primary">Download optimized photo</button>
-          <div class="two">
-            <button id="change" class="ghost">Change photo</button>
-            <button id="toCollage" class="ghost">Make a collage</button>
-          </div>
-          <input id="file2" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
-        </div>
-      </aside>
+      <span id="cropHint" class="hint"></span>
     </div>
   </section>
 
-  <!-- COLLAGE -->
-  <section id="collage" class="editor" hidden>
-    <div class="grid">
-      <div class="stageCol">
-        <div class="stageBar">
-          <div class="pv"><span class="tag">COLLAGE</span><span id="cDims" class="dims">—</span></div>
-        </div>
-        <div class="stageWrap">
-          <div id="cStage" class="cstage"><canvas id="cCol"></canvas></div>
-        </div>
-        <p id="cNote" class="note">Tap a tile to add or replace a photo.</p>
-        <p class="priv small">🔒 Local processing — your photos are never uploaded.</p>
-      </div>
-
-      <aside class="panel">
-        <section class="blk">
-          <h2>Layout</h2>
-          <div id="layouts" class="lgrid"></div>
-        </section>
-
-        <section class="blk">
-          <h2>Shape</h2>
-          <div class="seg" id="cAr">
-            <button data-v="1:1">1:1</button>
-            <button data-v="4:5" class="on">4:5</button>
-            <button data-v="9:16">9:16</button>
-          </div>
-        </section>
-
-        <section class="blk">
-          <h2>Style</h2>
-          <div class="sl">
-            <div class="lab"><span>Spacing</span><output id="oGap">14</output></div>
-            <input id="cGap" type="range" min="0" max="60" step="1" value="14">
-          </div>
-          <div class="sl">
-            <div class="lab"><span>Rounded corners</span><output id="oRad">16</output></div>
-            <input id="cRad" type="range" min="0" max="80" step="1" value="16">
-          </div>
-          <div class="sl"><div class="lab"><span>Background</span></div></div>
-          <div id="swatches" class="sws"></div>
-        </section>
-
-        <div class="actions">
-          <button id="cGo" class="primary">Continue to editor</button>
-          <div class="two">
-            <button id="cAdd" class="ghost">Add photos</button>
-            <button id="cClear" class="ghost">Clear all</button>
-          </div>
-          <button id="cBack" class="ghost">Back</button>
-          <input id="fileCol" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
-        </div>
-      </aside>
+  <section class="group">
+    <h2>Frame</h2>
+    <div id="frames" class="cards"></div>
+    <div id="capRow" class="rowline" hidden>
+      <input id="caption" type="text" maxlength="60" placeholder="Write a caption… (Polaroid style)">
     </div>
+  </section>
+
+  <section class="group">
+    <h2>Filters</h2>
+    <div id="filters" class="chips"></div>
+  </section>
+
+  <section class="group">
+    <h2>Effects</h2>
+    <div id="effects" class="chips"></div>
+    <button id="fxMore" class="btn link">Show all effects</button>
+  </section>
+
+  <section class="group">
+    <div id="rowStrength"></div>
+    <div id="rowFx" hidden></div>
+    <h2>Adjust</h2>
+    <div id="sliders"></div>
+    <h2>Pro tools</h2>
+    <div id="sliders2"></div>
+    <button id="resetAdj" class="btn link">Reset all adjustments</button>
+  </section>
+
+  <section class="group">
+    <h2>Export</h2>
+    <div class="seg" data-key="fmt">
+      <button data-v="jpg" class="on">JPG</button>
+      <button data-v="webp">WEBP</button>
+      <button data-v="png">PNG</button>
+    </div>
+    <div class="seg q" data-key="quality">
+      <button data-v="standard">Standard</button>
+      <button data-v="high" class="on">High</button>
+      <button data-v="ultra">Ultra</button>
+    </div>
+    <p id="qHint" class="hint"></p>
   </section>
 </main>
 
-<footer class="foot">
-  <span>PicalexHQ · High Quality. Every Pixel.</span>
-  <span>No uploads · No tracking · No servers</span>
-</footer>
+<!-- ============ COLLAGE ============ -->
+<section id="collage" hidden>
+  <header class="bar">
+    <button id="cBack" class="btn small">← Back</button>
+    <span class="spacer"></span>
+    <button id="cAdd" class="btn small ghost">＋ Photos</button>
+    <button id="cClear" class="btn small ghost">Clear</button>
+    <button id="cGo" class="btn small primary">Use →</button>
+  </header>
 
-<div id="sheet" class="sheet" hidden>
-  <div class="sheet-in">
-    <p>Press and hold the photo, then choose <b>Save image</b>.</p>
-    <img id="sheetImg" alt="Your edited photo">
-    <div class="two">
-      <button id="sheetShare" class="ghost" type="button" hidden>Share</button>
-      <button id="sheetClose" class="primary slim" type="button">Done</button>
+  <div id="cStage"><canvas id="cCol"></canvas></div>
+  <p class="hint center"><span id="cDims"></span> · tap a tile to replace it</p>
+
+  <section class="group">
+    <h2>Layout</h2>
+    <div id="layouts" class="lchips"></div>
+    <div class="seg" id="cAr">
+      <button data-v="1:1">1:1</button>
+      <button data-v="4:5" class="on">4:5</button>
+      <button data-v="9:16">9:16</button>
     </div>
+    <div class="rowline">
+      <label>Gap <output id="oGap">14</output></label>
+      <input id="cGap" type="range" min="0" max="60" value="14">
+    </div>
+    <div class="rowline">
+      <label>Radius <output id="oRad">16</output></label>
+      <input id="cRad" type="range" min="0" max="80" value="16">
+    </div>
+    <h2>Background</h2>
+    <div id="swatches"></div>
+  </section>
+  <input id="fileCol" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+</section>
+
+<input id="file2" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+
+<div id="toast" role="status"></div>
+<div id="busy" hidden><div class="spin"></div><p id="busyTxt"></p></div>
+<div id="drop"><b>Drop to start editing</b></div>
+
+<div id="sheet" hidden>
+  <div class="sheet-in">
+    <img id="sheetImg" alt="Exported photo">
+    <p class="hint">Long-press the image to save it to your gallery.</p>
+    <button id="sheetShare" class="btn primary" hidden>Share</button>
+    <button id="sheetClose" class="btn ghost">Close</button>
   </div>
 </div>
-
-<div id="busy" class="busy" hidden><div class="spin"></div><span id="busyTxt">Processing…</span></div>
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="script.js"></script>
 <script src="extras.js"></script>
