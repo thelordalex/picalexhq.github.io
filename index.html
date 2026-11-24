@@ -93,12 +93,18 @@
         <section class="blk">
           <h2>Effect</h2>
           <div id="effects" class="fgrid"></div>
+          <button id="fxMore" class="link more" type="button">Show all effects</button>
           <div class="row" id="rowFx"></div>
         </section>
 
         <section class="blk">
           <div class="h2row"><h2>Adjust</h2><button id="resetAdj" class="link">Reset</button></div>
           <div id="sliders"></div>
+        </section>
+
+        <section class="blk">
+          <h2>Fine tune</h2>
+          <div id="sliders2"></div>
         </section>
 
         <section class="blk">
@@ -197,6 +203,17 @@
   <span>PicalexHQ · High Quality. Every Pixel.</span>
   <span>No uploads · No tracking · No servers</span>
 </footer>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-in">
+    <p>Press and hold the photo, then choose <b>Save image</b>.</p>
+    <img id="sheetImg" alt="Your edited photo">
+    <div class="two">
+      <button id="sheetShare" class="ghost" type="button" hidden>Share</button>
+      <button id="sheetClose" class="primary slim" type="button">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="busy" class="busy" hidden><div class="spin"></div><span id="busyTxt">Processing…</span></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
