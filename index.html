@@ -43,6 +43,7 @@
     <button data-tab="result" class="on">Result</button>
     <button data-tab="compare">Compare</button>
     <button data-tab="move" id="tabMove" hidden>Reposition</button>
+    <button data-tab="restore" id="tabRestore" hidden>Restore</button>
   </nav>
 
   <section class="group">
@@ -54,6 +55,67 @@
         <button data-v="fit">Fit</button>
       </div>
       <span id="cropHint" class="hint"></span>
+    </div>
+  </section>
+
+  <section class="group" id="sizeGroup">
+    <h2>Size</h2>
+    <div id="sizePresets" class="cards"></div>
+    <div class="szrow">
+      <label class="fld" for="szW"><span>Width (px)</span><input id="szW" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="4"></label>
+      <label class="fld" for="szH"><span>Height (px)</span><input id="szH" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="4"></label>
+    </div>
+    <label class="chk" for="szKeep"><input id="szKeep" type="checkbox" checked><span>Keep aspect ratio</span></label>
+    <div class="fitrow">
+      <div class="seg gold" id="szFit" data-key="sizeFit">
+        <button data-v="fill" class="on">Fill (crop)</button>
+        <button data-v="fit">Fit (letterbox)</button>
+        <button data-v="stretch">Stretch</button>
+      </div>
+    </div>
+    <p id="szFitHint" class="hint"></p>
+    <div id="szBgRow" class="rowline" hidden>
+      <label for="szBg">Letterbox colour</label>
+      <div id="szSw" class="swrow">
+        <button type="button" data-c="#000000" aria-label="Black"><i style="background:#000000"></i></button>
+        <button type="button" data-c="#ffffff" aria-label="White"><i style="background:#ffffff"></i></button>
+        <button type="button" data-c="#808080" aria-label="Grey"><i style="background:#808080"></i></button>
+      </div>
+      <input id="szBg" type="color" value="#000000" aria-label="Custom letterbox colour">
+    </div>
+    <p id="szWarn" class="warn" hidden>Stretch changes the proportions of the photo and distorts it. Use Fill or Fit to keep it natural.</p>
+    <p id="szInfo" class="info"></p>
+    <p id="szNote" class="warn" hidden></p>
+  </section>
+
+  <section class="group" id="cutGroup">
+    <h2>Remove background</h2>
+    <button id="bgToggle" class="btn ghost tt" type="button" aria-pressed="false">Remove background</button>
+    <div id="bgPanel" hidden>
+      <div class="seg gold" id="bgMode">
+        <button data-m="simple" class="on" type="button">Simple</button>
+        <button data-m="ai" type="button">AI model</button>
+      </div>
+      <p id="bgExplain" class="hint"></p>
+      <div id="bgAiBox" hidden>
+        <p id="bgAiInfo" class="hint"></p>
+        <progress id="bgAiProg" max="100" value="0" hidden></progress>
+        <button id="bgAiGo" class="btn ghost tt" type="button">Use AI model</button>
+      </div>
+      <div id="bgSimple">
+        <label class="chk" for="bgConn"><input id="bgConn" type="checkbox" checked><span>Only remove background that touches the photo edges</span></label>
+      </div>
+      <div id="bgSliders"></div>
+      <div class="rowline btns">
+        <button id="bgRestore" class="btn ghost tt" type="button">Restore brush</button>
+        <button id="bgUndo" class="btn ghost tt" type="button" disabled>Undo stroke</button>
+        <button id="bgClear" class="btn ghost tt" type="button" disabled>Clear brush</button>
+      </div>
+      <div id="bgFillRow" class="rowline">
+        <label for="bgFill">JPG fill colour</label>
+        <input id="bgFill" type="color" value="#ffffff">
+      </div>
+      <p id="bgFmtHint" class="hint"></p>
     </div>
   </section>
 
@@ -99,6 +161,7 @@
       <button data-v="ultra">Ultra</button>
     </div>
     <p id="qHint" class="hint"></p>
+    <p id="expInfo" class="info"></p>
   </section>
 </main>
 
