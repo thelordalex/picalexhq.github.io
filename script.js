@@ -1436,4 +1436,16 @@ $('#effects').classList.add('fold');
 $('#fxMore').addEventListener('click', e => { const f = $('#effects').classList.toggle('fold'); e.target.textContent = f ? 'Show all effects' : 'Show fewer'; });
 buildSliders();
 syncUI();
+/* ---- public API for extras.js: add filters / effects without touching this file ---- */
+let pxT = 0;
+const upsert = (list, it) => { const i = list.findIndex(o => o.id === it.id); if (i < 0) list.push(it); else list[i] = it; };
+function refreshLists() {
+  clearTimeout(pxT);
+  pxT = setTimeout(() => { buildChips('#filters', FILTERS, 'filter'); buildChips('#effects', EFFECTS, 'effect'); syncUI(); renderThumbs(); }, 0);
+}
+window.PX = {
+  T, G, RG, VG, CM, ED, HT, ST, DO, BO, FL, SM, RY, SP, MX, SC, WP, BG, MI, SF, TL, SK, TX, RD, F, BL, NZ, D1, D2, D3, WH, RB,
+  addEffect(id, name, steps) { RC[id] = Array.isArray(steps) ? steps : [steps]; upsert(EFFECTS, { id, name }); refreshLists(); },
+  addFilter(id, name, p) { upsert(FILTERS, { id, name, p }); refreshLists(); }
+};
 })();
