@@ -7,7 +7,20 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const tick = () => new Promise(r => setTimeout(r, 30));
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
-const copyCanvas = c => { const t = mk(c.width, c.height); t.getContext('2d').drawImage(c, 0, 0); return t; };
+/* reusable scratch canvases: avoids allocating new canvases on every live render */
+const pool = {};
+function scratch(k, w, h) {
+  let c = pool[k];
+  if (!c) c = pool[k] = mk(w, h);
+  else if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return c;
+}
+function freeScratch() { for (const k in pool) { pool[k].width = pool[k].height = 0; delete pool[k]; } }
+function copyCanvas(c, k) {
+  const t = scratch(k || 'cp', c.width, c.height), x = t.getContext('2d');
+  x.clearRect(0, 0, t.width, t.height); x.drawImage(c, 0, 0);
+  return t;
+}
 function rng(seed) {                       // mulberry32: same seed = same result in preview and export
   let a = seed >>> 0;
   return () => {
@@ -30,7 +43,7 @@ function rrPath(ctx, x, y, w, h, r) {
 
 /* ================= config ================= */
 const LOW_MEM = !!(navigator.deviceMemory && navigator.deviceMemory <= 3);
-const MAX_PIXELS = LOW_MEM ? 8e6 : 16e6;
+const MAX_PIXELS = LOW_MEM ? 6e6 : 12e6;   // working-size cap: plenty for 1080-wide social output
 const SMALL_SIDE = 1600;
 const PREVIEW_SIDE = 1000;
 const COL_SIDE = LOW_MEM ? 1100 : 1500;
@@ -46,7 +59,6 @@ const PLATFORMS = [
 
 /* p: b c s (adjust units) | temp lift hl fade vig clarity sharp glow grain | split {sh,hi} = rgb offsets */
 const FILTERS = [
-  { id: 'none',      name: 'Original',   p: {} },
   { id: 'natural',    name: 'Natural',    p: { c: 2, s: 3, sharp: 8 } },
   { id: 'clean',      name: 'Clean',      p: { b: 3, c: 5, s: 2, temp: -1, lift: .15, clarity: .10, sharp: 14 } },
   { id: 'vivid',      name: 'Vivid',      p: { b: 1, c: 8, s: 16, sharp: 12 } },
@@ -66,17 +78,7 @@ const FILTERS = [
   { id: 'neon',       name: 'Neon',       p: { c: 12, s: 24, glow: .30, sharp: 8, split: { sh: [14, -8, 26], hi: [-8, 10, 18] } } }
 ];
 
-const EFFECTS = [
-  { id: 'none',   name: 'None' },
-  { id: 'glitch', name: 'Glitch' },
-  { id: 'rgb',    name: 'RGB Split' },
-  { id: 'vhs',    name: 'VHS' },
-  { id: 'pixel',  name: 'Pixelate' },
-  { id: 'leak',   name: 'Light Leak' },
-  { id: 'dust',   name: 'Dust' },
-  { id: 'wave',   name: 'Liquid' },
-  { id: 'ghost',  name: 'Ghost' }
-];
+const EFFECTS = [{ id: 'none', name: 'None' }].concat(('vhs:VHS,glitch:Glitch,cyber:Cyber,y2k:Y2K,retro:Retro,vintage:Vintage,film:Film,camcorder:Camcorder,ccd:CCD,dv:DV,polaroid:Polaroid,disposable:Disposable,flash:Flash,paparazzi:Paparazzi,neon:Neon,chrome:Chrome,hologram:Hologram,prism:Prism,rainbow:Rainbow,aurora:Aurora,dreamy:Dreamy,dream:Dream,fairy:Fairy,ethereal:Ethereal,angel:Angel,heavenly:Heavenly,cosmic:Cosmic,galaxy:Galaxy,space:Space,starry:Starry,fire:Fire,flame:Flame,smoke:Smoke,wave:Liquid,water:Water,ice:Ice,glass:Glass,mirror:Mirror,electric:Electric,cyberpunk:Cyberpunk,matrix:Matrix,anime:Anime,comic:Comic,sketch:Sketch,doodle:Doodle,graffiti:Graffiti,sticker:Sticker,newspaper:Newspaper,collage:Collage,distortion:Distortion,rgb:RGB Split,pixel:Pixelate,leak:Light Leak,dust:Dust,ghost:Ghost').split(',').map(s => { const p = s.split(':'); return { id: p[0], name: p[1] }; }));
 
 /* frame padding fractions are relative to output WIDTH */
 const FRAMES = [
@@ -98,11 +100,11 @@ const SLIDERS = [
   { k: 'warm',  label: 'Warmth',     min: -50, max: 50 },
   { k: 'vig',   label: 'Vignette',   min: 0,   max: 100 },
   { k: 'glow',  label: 'Glow',       min: 0,   max: 100 },
-  { k: 'grain',   label: 'Film grain', min: 0,   max: 100 },
-  { k: 'fade',    label: 'Fade',       min: 0,   max: 40 },
-  { k: 'clarity', label: 'Clarity',    min: 0,   max: 100 },
-  { k: 'hl',      label: 'Highlights', min: -40, max: 40 },
-  { k: 'sh',      label: 'Shadows',    min: -40, max: 40 }
+  { k: 'grain', label: 'Film grain', min: 0,   max: 100 },
+  { k: 'shadows',    g: 2, label: 'Shadows',    min: -50, max: 50 },
+  { k: 'highlights', g: 2, label: 'Highlights', min: -50, max: 50 },
+  { k: 'clarity',    g: 2, label: 'Clarity',    min: 0,   max: 100 },
+  { k: 'fade',       g: 2, label: 'Fade',       min: 0,   max: 100 }
 ];
 
 const QUALITY = {
@@ -110,7 +112,7 @@ const QUALITY = {
   webp: { standard: .80, high: .92, ultra: 1.0 }
 };
 const MIME = { jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png' };
-const NEUTRAL = { b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0 };
+const NEUTRAL = { b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0, shadows: 0, highlights: 0, clarity: 0, fade: 0 };
 
 /* ================= state ================= */
 const st = {
@@ -119,8 +121,8 @@ const st = {
   filter: 'natural', strength: 100,
   effect: 'none', fxk: 70,
   frame: 'none', caption: '',
-  b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0,
-  fade: 0, clarity: 0, hl: 0, sh: 0,
+  b: 0, c: 0, s: 0, sharp: 0, warm: 0, vig: 0, glow: 0, grain: 0, shadows: 0, highlights: 0, clarity: 0, fade: 0,
+  srcId: 0, fast: false,
   fmt: 'jpg', quality: 'high',
   tab: 'result', fx: .5, fy: .5, cmp: 50
 };
@@ -214,11 +216,9 @@ function effective(adj, f, k) {
     s: clamp(adj.s + m(p.s), -100, 100),
     sharp: adj.sharp + m(p.sharp),
     temp: m(p.temp) + adj.warm * 0.2,
-    lift: m(p.lift) + (adj.sh || 0) / 100 * 0.9,
-    hl: m(p.hl) + (adj.hl || 0) / 100 * 0.7,
-    fade: m(p.fade) + (adj.fade || 0) / 100 * 0.3,
+    lift: m(p.lift) + adj.shadows / 50 * 0.6, hl: m(p.hl) - adj.highlights / 50 * 0.5, fade: m(p.fade) + adj.fade / 100 * 0.15,
     vig: m(p.vig) + adj.vig / 100 * 0.5,
-    clarity: m(p.clarity) + (adj.clarity || 0) / 100 * 0.7,
+    clarity: m(p.clarity) + adj.clarity / 100 * 0.5,
     glow: m(p.glow) + adj.glow / 100,
     grain: m(p.grain) + adj.grain / 100 * 0.6,
     split: null
@@ -354,12 +354,14 @@ function process(ctx, w, h, e) {
 /* ================= glow / grain / effects ================= */
 function bloom(ctx, w, h, amt) {
   if (amt < 0.02) return;
-  const s1 = mk(Math.max(2, w >> 3), Math.max(2, h >> 3));
+  const s1 = scratch('b1', Math.max(2, w >> 3), Math.max(2, h >> 3));
   const c1 = s1.getContext('2d');
+  c1.clearRect(0, 0, s1.width, s1.height);
   c1.imageSmoothingQuality = 'high';
   c1.drawImage(ctx.canvas, 0, 0, s1.width, s1.height);
-  const s2 = mk(Math.max(2, w >> 5), Math.max(2, h >> 5));
+  const s2 = scratch('b2', Math.max(2, w >> 5), Math.max(2, h >> 5));
   const c2 = s2.getContext('2d');
+  c2.clearRect(0, 0, s2.width, s2.height);
   c2.imageSmoothingQuality = 'high';
   c2.drawImage(s1, 0, 0, s2.width, s2.height);
   ctx.save();
@@ -369,7 +371,6 @@ function bloom(ctx, w, h, amt) {
   ctx.globalAlpha = a;      ctx.drawImage(s1, 0, 0, w, h);
   ctx.globalAlpha = a * .8; ctx.drawImage(s2, 0, 0, w, h);
   ctx.restore();
-  s1.width = s1.height = s2.width = s2.height = 0;
 }
 
 function grain(ctx, w, h, amt) {
@@ -392,7 +393,7 @@ function grain(ctx, w, h, amt) {
 }
 
 function fxGlitch(ctx, w, h, k) {
-  const r = rng(7), src = copyCanvas(ctx.canvas);
+  const r = rng(7), src = copyCanvas(ctx.canvas, 'fx');
   const n = Math.round(5 + k * 14);
   for (let i = 0; i < n; i++) {
     const y = Math.floor(r() * h), hh = Math.max(2, Math.floor((0.008 + r() * 0.06) * h));
@@ -401,7 +402,6 @@ function fxGlitch(ctx, w, h, k) {
     ctx.drawImage(src, 0, y, w, hh, off, y, w, hh);
     ctx.drawImage(src, 0, y, w, hh, off - Math.sign(off) * w, y, w, hh);
   }
-  src.width = src.height = 0;
   const dx = Math.max(1, Math.round(w * 0.012 * k));
   const img = ctx.getImageData(0, 0, w, h), d = img.data, s = new Uint8ClampedArray(d);
   for (let y = 0; y < h; y++) {
@@ -470,15 +470,15 @@ function fxVhs(ctx, w, h, k) {
 
 function fxPixel(ctx, w, h, k) {
   const b = Math.max(2, Math.round(w * (0.004 + 0.03 * k)));
-  const sm = mk(Math.ceil(w / b), Math.ceil(h / b));
+  const sm = scratch('px', Math.ceil(w / b), Math.ceil(h / b));
   const sc = sm.getContext('2d');
+  sc.clearRect(0, 0, sm.width, sm.height);
   sc.imageSmoothingQuality = 'high';
   sc.drawImage(ctx.canvas, 0, 0, sm.width, sm.height);
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(sm, 0, 0, sm.width * b, sm.height * b);
   ctx.restore();
-  sm.width = sm.height = 0;
 }
 
 function fxLeak(ctx, w, h, k) {
@@ -532,17 +532,267 @@ function fxWave(ctx, w, h, k) {
 }
 
 function fxGhost(ctx, w, h, k) {
-  const src = copyCanvas(ctx.canvas), off = w * .02 * (.5 + k);
+  const src = copyCanvas(ctx.canvas, 'fx'), off = w * .02 * (.5 + k);
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   ctx.globalAlpha = .1 + .35 * k; ctx.drawImage(src, off, -off * .4, w, h);
   ctx.globalAlpha = .25 * k;      ctx.drawImage(src, -off * 1.4, off * .5, w, h);
   ctx.restore();
-  src.width = src.height = 0;
 }
 
 const FX = { glitch: fxGlitch, rgb: fxChroma, vhs: fxVhs, pixel: fxPixel, leak: fxLeak, dust: fxDust, wave: fxWave, ghost: fxGhost };
-function runEffect(id, ctx, w, h, k) { if (FX[id]) FX[id](ctx, w, h, clamp(k, 0.05, 1)); }
+
+/* ---- effect toolkit: small steps composed into recipes (RC). Each recipe is blended with the original by Effect strength ---- */
+const T = (c, m, a) => (x, w, h) => { x.save(); x.globalCompositeOperation = m; x.globalAlpha = a; x.fillStyle = c; x.fillRect(0, 0, w, h); x.restore(); };
+const stp = (g, cs) => { cs.forEach((c, i) => g.addColorStop(i / (cs.length - 1), c)); return g; };
+const G = (cs, m, a, ang) => (x, w, h) => {                       // linear gradient overlay at an angle (0 = left→right, 90 = top→bottom)
+  const r = ang * Math.PI / 180, dx = Math.cos(r), dy = Math.sin(r), L = (Math.abs(w * dx) + Math.abs(h * dy)) / 2;
+  x.save(); x.globalCompositeOperation = m; x.globalAlpha = a;
+  x.fillStyle = stp(x.createLinearGradient(w / 2 - dx * L, h / 2 - dy * L, w / 2 + dx * L, h / 2 + dy * L), cs); x.fillRect(0, 0, w, h); x.restore();
+};
+const RG = (px, py, pr, cs, m, a) => (x, w, h) => {                // radial gradient overlay
+  const R = Math.max(w, h) * pr;
+  x.save(); x.globalCompositeOperation = m; x.globalAlpha = a;
+  x.fillStyle = stp(x.createRadialGradient(w * px, h * py, 0, w * px, h * py, R), cs); x.fillRect(0, 0, w, h); x.restore();
+};
+const VG = a => RG(.5, .5, .75, ['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,' + a + ')'], 'source-over', 1);
+const CM = o => (x, w, h) => {                                     // colour matrix: c contrast, s saturation, b brightness, m rgb gain, p posterize, g gray
+  const im = x.getImageData(0, 0, w, h), d = im.data, c = 1 + (o.c || 0), s = 1 + (o.s || 0), b = (o.b || 0) * 255, m = o.m || [1, 1, 1], p = o.p ? 255 / (o.p - 1) : 0;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i], g = d[i + 1], q = d[i + 2];
+    const l = r * .2126 + g * .7152 + q * .0722;
+    if (o.g) r = g = q = l; else if (s !== 1) { r = l + (r - l) * s; g = l + (g - l) * s; q = l + (q - l) * s; }
+    r = ((r - 128) * c + 128 + b) * m[0]; g = ((g - 128) * c + 128 + b) * m[1]; q = ((q - 128) * c + 128 + b) * m[2];
+    if (p) { r = Math.round(r / p) * p; g = Math.round(g / p) * p; q = Math.round(q / p) * p; }
+    d[i] = r; d[i + 1] = g; d[i + 2] = q;
+  }
+  x.putImageData(im, 0, 0);
+};
+const ED = (mode, col, gain) => (x, w, h) => {                     // Sobel edges: 'line' ink, 'neon' glow lines, 'sketch' pencil on paper
+  const im = x.getImageData(0, 0, w, h), d = im.data, N = w * h, Lm = new Uint8Array(N), c = col || [0, 0, 0];
+  for (let p = 0, i = 0; p < N; p++, i += 4) Lm[p] = (d[i] * 54 + d[i + 1] * 183 + d[i + 2] * 19) >> 8;
+  for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) {
+    const p = y * w + X, i = p * 4,
+      gx = Lm[p - w + 1] + 2 * Lm[p + 1] + Lm[p + w + 1] - Lm[p - w - 1] - 2 * Lm[p - 1] - Lm[p + w - 1],
+      gy = Lm[p + w - 1] + 2 * Lm[p + w] + Lm[p + w + 1] - Lm[p - w - 1] - 2 * Lm[p - w] - Lm[p - w + 1],
+      m = Math.min(1, Math.hypot(gx, gy) / 220 * gain);
+    if (mode === 'sketch') { const v = Math.min(255 - m * 255, 255 - (255 - Lm[p]) * .3); d[i] = v; d[i + 1] = v * .985; d[i + 2] = v * .95; }
+    else { const k = mode === 'neon' ? .18 : 1 - m, a = mode === 'neon' ? m : m; d[i] = d[i] * k + c[0] * a; d[i + 1] = d[i + 1] * k + c[1] * a; d[i + 2] = d[i + 2] * k + c[2] * a; }
+  }
+  x.putImageData(im, 0, 0);
+};
+const HT = (n, over, col) => (x, w, h) => {                        // halftone dots (over = print dots on the photo, else dots on paper)
+  const c = Math.max(4, Math.round(w / n)), gw = Math.ceil(w / c), gh = Math.ceil(h / c), s = scratch('ht', gw, gh), sc = s.getContext('2d');
+  sc.clearRect(0, 0, gw, gh); sc.drawImage(x.canvas, 0, 0, gw, gh);
+  const d = sc.getImageData(0, 0, gw, gh).data;
+  x.save();
+  if (over) x.globalCompositeOperation = 'multiply'; else { x.fillStyle = '#f2efe6'; x.fillRect(0, 0, w, h); }
+  x.fillStyle = col || '#111';
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+    const o = (j * gw + i) * 4, r = (1 - (d[o] * .2126 + d[o + 1] * .7152 + d[o + 2] * .0722) / 255) * c * .75;
+    if (r < .5) continue;
+    x.beginPath(); x.arc((i + .5) * c, (j + .5) * c, r, 0, 6.2832); x.fill();
+  }
+  x.restore();
+};
+const ST = (n, sz, cs, seed) => (x, w, h) => {                    // glowing stars with glints
+  const r = rng(seed), u = w / 1080;
+  x.save(); x.globalCompositeOperation = 'lighter'; x.lineWidth = Math.max(1, u);
+  for (let i = 0; i < n; i++) {
+    const px = r() * w, py = r() * h, s = (.4 + r() * r() * 2.4) * sz * u, c = cs[i % cs.length];
+    x.fillStyle = stp(x.createRadialGradient(px, py, 0, px, py, s * 3), [c, 'rgba(0,0,0,0)']); x.fillRect(px - s * 3, py - s * 3, s * 6, s * 6);
+    if (s > 2.8 * u) { x.strokeStyle = c; x.beginPath(); x.moveTo(px - s * 4, py); x.lineTo(px + s * 4, py); x.moveTo(px, py - s * 4); x.lineTo(px, py + s * 4); x.stroke(); }
+  }
+  x.restore();
+};
+const DO = (cs, seed) => (x, w, h) => {                            // hand-drawn doodles: stars, hearts, squiggles, circles
+  const r = rng(seed), u = w / 1080;
+  x.save(); x.lineCap = x.lineJoin = 'round'; x.lineWidth = 5 * u;
+  for (let i = 0; i < 14; i++) {
+    x.strokeStyle = cs[i % cs.length]; x.beginPath();
+    const px = r() * w, py = r() * h, s = (25 + r() * 50) * u, t = i % 4;
+    if (t === 0) { for (let a = 0; a < 10; a++) { const R = a % 2 ? s * .45 : s, an = a * Math.PI / 5 - 1.57; x.lineTo(px + Math.cos(an) * R, py + Math.sin(an) * R); } x.closePath(); }
+    else if (t === 1) { x.moveTo(px, py + s * .7); x.bezierCurveTo(px - s * 1.2, py - s * .2, px - s * .4, py - s, px, py - s * .35); x.bezierCurveTo(px + s * .4, py - s, px + s * 1.2, py - s * .2, px, py + s * .7); }
+    else if (t === 2) { x.moveTo(px - s, py); for (let a = 1; a <= 6; a++) x.quadraticCurveTo(px - s + (a - .5) * s / 3, py + (a % 2 ? -1 : 1) * s * .5, px - s + a * s / 3, py); }
+    else x.arc(px, py, s * .6, 0, 6.2832);
+    x.stroke();
+  }
+  x.restore();
+};
+const BO = (n, col, seed) => (x, w, h) => {                        // lightning bolts
+  const r = rng(seed), u = w / 1080;
+  x.save(); x.globalCompositeOperation = 'lighter'; x.lineJoin = 'round';
+  for (let i = 0; i < n; i++) {
+    let px = r() * w, py = 0; const pts = [[px, py]], end = h * (.5 + r() * .5);
+    while (py < end) { px += (r() - .5) * w * .12; py += h * (.03 + r() * .05); pts.push([px, py]); }
+    [[14, .18, col], [6, .4, col], [2, 1, '#fff']].forEach(q => {
+      x.globalAlpha = q[1]; x.strokeStyle = q[2]; x.lineWidth = q[0] * u; x.beginPath();
+      pts.forEach((p, j) => j ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.stroke();
+    });
+  }
+  x.restore();
+};
+const FL = (n, cs, seed) => (x, w, h) => {                         // flame tongues rising from the bottom
+  const r = rng(seed);
+  x.save(); x.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i++) {
+    const px = r() * w, bw = w * (.04 + r() * .07), fh = h * (.15 + r() * .3);
+    x.fillStyle = stp(x.createLinearGradient(0, h, 0, h - fh), [cs[i % cs.length], 'rgba(255,60,0,0)']);
+    x.beginPath(); x.moveTo(px - bw, h);
+    x.bezierCurveTo(px - bw, h - fh * .5, px - bw * .3, h - fh * .6, px + (r() - .5) * bw, h - fh);
+    x.bezierCurveTo(px + bw * .3, h - fh * .6, px + bw, h - fh * .5, px + bw, h); x.fill();
+  }
+  x.restore();
+};
+const SM = (n, seed) => (x, w, h) => {                             // soft smoke clouds
+  const r = rng(seed);
+  x.save(); x.globalCompositeOperation = 'screen';
+  for (let i = 0; i < n; i++) {
+    const px = r() * w, py = h * (.3 + r() * .7), R = w * (.15 + r() * .3);
+    x.fillStyle = stp(x.createRadialGradient(px, py, 0, px, py, R), ['rgba(255,255,255,' + (.14 + r() * .14) + ')', 'rgba(255,255,255,0)']); x.fillRect(px - R, py - R, R * 2, R * 2);
+  }
+  x.restore();
+};
+const RY = (px, py, n, c, a, seed) => (x, w, h) => {               // light rays from a point
+  const r = rng(seed), X = w * px, Y = h * py, L = Math.hypot(w, h);
+  x.save(); x.globalCompositeOperation = 'screen';
+  x.fillStyle = stp(x.createRadialGradient(X, Y, 0, X, Y, L), ['rgba(' + c + ',' + a + ')', 'rgba(' + c + ',0)']);
+  for (let i = 0; i < n; i++) {
+    const an = Math.PI * (.1 + .8 * r()), wd = .015 + r() * .04;
+    x.beginPath(); x.moveTo(X, Y); x.lineTo(X + Math.cos(an - wd) * L, Y + Math.sin(an - wd) * L); x.lineTo(X + Math.cos(an + wd) * L, Y + Math.sin(an + wd) * L); x.fill();
+  }
+  x.restore();
+};
+const SP = (n, cs, seed) => (x, w, h) => {                        // spray splatter with drips
+  const r = rng(seed);
+  x.save();
+  for (let i = 0; i < n; i++) {
+    const px = r() * w, py = r() * h, R = w * (.004 + r() * .02);
+    x.globalAlpha = .6 + r() * .4; x.fillStyle = cs[i % cs.length]; x.beginPath(); x.arc(px, py, R, 0, 6.2832); x.fill();
+    if (r() < .25) x.fillRect(px - R * .15, py, R * .3, h * (.03 + r() * .1));
+  }
+  x.restore();
+};
+const MX = (x, w, h) => {                                          // matrix code rain
+  const r = rng(5), sz = Math.round(w * .022);
+  x.save(); x.font = sz + 'px monospace'; x.globalCompositeOperation = 'lighter';
+  for (let cx = 0; cx < w; cx += sz) {
+    const len = 4 + Math.floor(r() * 18), y0 = r() * h;
+    for (let i = 0; i < len; i++) { x.fillStyle = 'rgba(60,255,120,' + (1 - i / len) * .8 + ')'; x.fillText(String.fromCharCode(48 + Math.floor(r() * 43)), cx, ((y0 - i * sz) % h + h) % h); }
+  }
+  x.restore();
+};
+const SC = a => (x, w, h) => { const u = Math.max(1, Math.round(w / 540)); x.fillStyle = 'rgba(0,0,0,' + a + ')'; for (let y = 0; y < h; y += 3 * u) x.fillRect(0, y, w, u); };
+const WP = (ax, ay, fx, fy, ph) => (x, w, h) => {                  // sine displacement (water, glass, distortion)
+  const im = x.getImageData(0, 0, w, h), d = new Uint32Array(im.data.buffer), s = new Uint32Array(d), A = Math.max(w, h) * .01;
+  for (let y = 0; y < h; y++) for (let X = 0; X < w; X++)
+    d[y * w + X] = s[clamp(Math.round(y + Math.sin(X * fy * 6.2832 / w + ph) * ay * A), 0, h - 1) * w + clamp(Math.round(X + Math.sin(y * fx * 6.2832 / h + ph) * ax * A), 0, w - 1)];
+  x.putImageData(im, 0, 0);
+};
+const BG = a => (x, w, h) => {                                     // lens bulge
+  const im = x.getImageData(0, 0, w, h), d = new Uint32Array(im.data.buffer), s = new Uint32Array(d), cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) for (let X = 0; X < w; X++) {
+    const nx = (X - cx) / cx, ny = (y - cy) / cy, r2 = nx * nx + ny * ny, f = r2 < 1 ? 1 - a * (1 - r2) : 1;
+    d[y * w + X] = s[clamp(Math.round(cy + ny * cy * f), 0, h - 1) * w + clamp(Math.round(cx + nx * cx * f), 0, w - 1)];
+  }
+  x.putImageData(im, 0, 0);
+};
+const MI = q => (x, w, h) => {
+  let o = copyCanvas(x.canvas, 'cp'); x.save(); x.translate(w, 0); x.scale(-1, 1); x.drawImage(o, 0, 0, w / 2, h, 0, 0, w / 2, h); x.restore();
+  if (q) { o = copyCanvas(x.canvas, 'cp'); x.save(); x.translate(0, h); x.scale(1, -1); x.drawImage(o, 0, 0, w, h / 2, 0, 0, w, h / 2); x.restore(); }
+};
+const SF = a => (x, w, h) => {                                     // soft focus
+  const s = scratch('sf', Math.max(2, w >> 2), Math.max(2, h >> 2)), c = s.getContext('2d');
+  c.clearRect(0, 0, s.width, s.height); c.imageSmoothingQuality = 'high'; c.drawImage(x.canvas, 0, 0, s.width, s.height);
+  x.save(); x.imageSmoothingQuality = 'high'; x.globalAlpha = a; x.drawImage(s, 0, 0, w, h); x.restore();
+};
+const TL = n => (x, w, h) => {                                     // scrapbook collage of polaroid-style tiles
+  const o = copyCanvas(x.canvas, 'cp'), r = rng(8), cw = w / n, ch = h / n, pw = cw * .94, ph = ch * .94, b = pw * .05, sw = w * .7, sh = h * .7;
+  x.save(); x.fillStyle = '#e9e2d3'; x.fillRect(0, 0, w, h);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    x.save(); x.translate((i + .5) * cw, (j + .5) * ch); x.rotate((r() - .5) * .12);
+    x.shadowColor = 'rgba(0,0,0,.35)'; x.shadowBlur = w * .012; x.shadowOffsetY = w * .004; x.fillStyle = '#fff'; x.fillRect(-pw / 2, -ph / 2, pw, ph);
+    x.shadowColor = 'transparent'; x.drawImage(o, (w - sw) * r(), (h - sh) * r(), sw, sh, -pw / 2 + b, -ph / 2 + b, pw - 2 * b, ph - 2 * b); x.restore();
+  }
+  x.restore();
+};
+const SK = (x, w, h) => {                                          // die-cut sticker card on a dotted background
+  const o = copyCanvas(x.canvas, 'cp'), m = w * .07, b = w * .022, iw = w - 2 * (m + b), ih = h - 2 * (m + b), s = Math.max(iw / w, ih / h), sw = iw / s, sh = ih / s;
+  x.save(); x.fillStyle = '#ffd1e8'; x.fillRect(0, 0, w, h); x.fillStyle = 'rgba(255,255,255,.6)';
+  for (let j = 0, q = 0; j < h; j += w * .05, q++) for (let i = (q % 2) * w * .025; i < w; i += w * .05) { x.beginPath(); x.arc(i, j, w * .006, 0, 6.2832); x.fill(); }
+  x.shadowColor = 'rgba(0,0,0,.4)'; x.shadowBlur = w * .02; x.shadowOffsetY = w * .008; x.fillStyle = '#fff'; rrPath(x, m, m, w - 2 * m, h - 2 * m, w * .09); x.fill(); x.shadowColor = 'transparent';
+  rrPath(x, m + b, m + b, iw, ih, w * .07); x.clip(); x.drawImage(o, (w - sw) / 2, (h - sh) / 2, sw, sh, m + b, m + b, iw, ih); x.restore();
+};
+const TX = (t, al, px, py, c, sz) => (x, w, h) => { x.save(); x.font = 'bold ' + Math.round(w * sz) + 'px monospace'; x.textAlign = al; x.fillStyle = c; x.shadowColor = c; x.shadowBlur = w * .008; x.fillText(t(), w * px, h * py); x.restore(); };
+const RD = (x, w, h) => { x.fillStyle = '#ff2020'; x.beginPath(); x.arc(w * .065, h * .09 - w * .0145, w * .014, 0, 6.2832); x.fill(); };
+const pad2 = n => String(n).padStart(2, '0');
+const D1 = () => { const d = new Date(); return d.getFullYear() + '/' + pad2(d.getMonth() + 1) + '/' + pad2(d.getDate()); };
+const D2 = () => { const d = new Date(); return "'" + String(d.getFullYear()).slice(2) + ' ' + pad2(d.getMonth() + 1) + ' ' + pad2(d.getDate()); };
+const D3 = () => { const d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+const F = (id, k) => (x, w, h) => FX[id](x, w, h, k);
+const BL = a => (x, w, h) => bloom(x, w, h, a);
+const NZ = a => (x, w, h) => grain(x, w, h, a);
+const WH = 'rgba(255,255,255,.9)', RB = ['#ff3b3b', '#ffb13b', '#fff23b', '#3bff6a', '#3bb4ff', '#9b3bff'];
+
+const RC = {
+  cyber:      [CM({ c: .25, s: .3 }), G(['#00e5ff', '#ff2bd6'], 'overlay', .55, 35), F('rgb', .7), SC(.18), BL(.4), NZ(.15)],
+  y2k:        [CM({ c: .15, s: .35, b: .05 }), G(['#ff9ad5', '#8ec5ff', '#e9d7ff'], 'soft-light', .9, 60), G(['#ffffff', 'rgba(255,255,255,0)'], 'screen', .25, 90), BL(.6), ST(40, 2.2, [WH, 'rgba(190,220,255,.9)', 'rgba(255,170,230,.9)'], 11), NZ(.1)],
+  retro:      [CM({ c: -.1, s: -.1, b: .04 }), T('#ffb066', 'multiply', .28), T('#3a2a55', 'lighten', .18), VG(.35), NZ(.25)],
+  vintage:    [CM({ s: -.45, c: -.1 }), T('#d9b98a', 'multiply', .45), T('#5b4630', 'lighten', .2), VG(.45), F('dust', .6), NZ(.3)],
+  film:       [CM({ c: .12, s: -.08 }), T('#ffcf9e', 'soft-light', .35), BL(.35), T('#ff3b1f', 'screen', .06), NZ(.38), F('dust', .4)],
+  camcorder:  [CM({ c: .1, s: -.15 }), SF(.35), SC(.12), VG(.3), RD, TX(() => 'REC', 'left', .095, .09, '#ff3030', .04), TX(D1, 'right', .95, .95, '#ffffff', .032), TX(D3, 'right', .95, .9, '#ffffff', .032), NZ(.2)],
+  ccd:        [CM({ c: .2, s: .1, b: .06, m: [.96, 1, 1.06] }), BL(.45), T('#bfe3ff', 'soft-light', .3), VG(.2), TX(D2, 'right', .95, .95, '#ff9b2e', .04), NZ(.15)],
+  dv:         [CM({ s: -.3, c: .05, m: [.97, 1, 1.04] }), SF(.25), SC(.16), VG(.25), TX(D1, 'right', .95, .95, '#ffb347', .035), TX(D3, 'left', .05, .95, '#ffb347', .035), NZ(.3)],
+  polaroid:   [CM({ c: -.08, s: -.05, b: .05 }), T('#ffd9a0', 'multiply', .2), T('#2c3a52', 'lighten', .18), VG(.25), BL(.15), NZ(.18)],
+  disposable: [CM({ c: .15, s: .1 }), T('#ffb45c', 'soft-light', .45), RG(.5, .45, .6, ['rgba(255,240,210,.55)', 'rgba(255,240,210,0)'], 'screen', .8), VG(.5), F('leak', .5), NZ(.4), TX(D2, 'right', .95, .95, '#ff8a1f', .04)],
+  flash:      [CM({ c: .3, s: -.05, b: .08 }), RG(.5, .45, .55, ['rgba(255,255,255,.55)', 'rgba(255,255,255,.15)', 'rgba(255,255,255,0)'], 'screen', 1), T('#2a1a55', 'lighten', .2), VG(.5), BL(.35), NZ(.25)],
+  paparazzi:  [CM({ c: .45, b: .1, s: -.1 }), RG(.5, .4, .45, ['rgba(255,255,255,.9)', 'rgba(255,255,255,.2)', 'rgba(255,255,255,0)'], 'screen', 1), VG(.7), ST(3, 6, ['rgba(255,255,255,1)'], 77), BL(.4), NZ(.2)],
+  neon:       [ED('neon', [40, 255, 240], 1.4), G(['#ff00c8', '#00f0ff'], 'screen', .18, 40), BL(.9)],
+  chrome:     [CM({ g: 1, c: .55, b: -.02 }), G(['#9fb4c8', '#ffffff', '#556677', '#e8f0f8'], 'overlay', .9, 70), T('#5aa0ff', 'soft-light', .3), BL(.4)],
+  hologram:   [CM({ s: .1, c: .15 }), G(['#ff6ad5', '#6adcff', '#c8ffb0', '#ffd86a', '#b46aff'], 'overlay', .7, 20), G(['#00ffee', '#ff00cc'], 'screen', .15, 110), F('rgb', .5), SC(.12), BL(.4)],
+  prism:      [F('rgb', .9), G(['rgba(255,0,80,0)', 'rgba(255,160,0,.5)', 'rgba(255,255,0,.5)', 'rgba(0,255,120,.5)', 'rgba(0,160,255,.5)', 'rgba(160,0,255,0)'], 'screen', .7, 35), BL(.3), F('ghost', .5)],
+  rainbow:    [G(RB, 'soft-light', 1, 20), G(RB, 'screen', .22, 20), CM({ s: .15 }), BL(.25)],
+  aurora:     [CM({ b: -.12, c: .1 }), G(['rgba(0,255,140,0)', 'rgba(0,255,140,.55)', 'rgba(120,60,255,.5)', 'rgba(255,60,200,0)'], 'screen', .9, 95), ST(30, 1.2, [WH], 15), BL(.5)],
+  dreamy:     [SF(.55), BL(.7), T('#ffc6e8', 'soft-light', .5), CM({ s: -.05, c: -.1, b: .06 }), ST(25, 1.6, [WH], 21)],
+  dream:      [SF(.6), BL(.6), G(['#7a8bff', '#ff9be6'], 'soft-light', .7, 70), CM({ c: -.1, b: .04 }), NZ(.12)],
+  fairy:      [SF(.4), BL(.6), T('#ffb3f0', 'soft-light', .45), G(['#a8ffd8', '#ffb3f0'], 'screen', .2, 45), ST(70, 2, [WH, 'rgba(255,200,250,.95)', 'rgba(190,255,230,.95)'], 31)],
+  ethereal:   [CM({ s: -.35, b: .1, c: -.18 }), SF(.55), BL(.8), T('#dfe9ff', 'soft-light', .5), RY(.8, 0, 5, '255,255,255', .18, 6)],
+  angel:      [CM({ b: .12, c: -.12, s: -.15 }), BL(1), T('#fffbe8', 'soft-light', .45), RY(.5, -.05, 9, '255,250,225', .28, 7), SF(.35), ST(15, 2, [WH], 41)],
+  heavenly:   [BL(.8), T('#ffe2a0', 'soft-light', .5), RY(.95, -.05, 8, '255,225,150', .3, 8), G(['rgba(255,236,170,.4)', 'rgba(255,236,170,0)'], 'screen', .8, 60), SF(.3)],
+  cosmic:     [CM({ b: -.2, c: .2, s: .1 }), G(['#1b0b4a', '#6a1bb8', '#ff3fa4', '#0a1b6a'], 'screen', .6, 50), RG(.7, .3, .5, ['rgba(255,120,220,.5)', 'rgba(255,120,220,0)'], 'screen', 1), ST(110, 1.4, [WH, 'rgba(190,200,255,.9)', 'rgba(255,190,240,.9)'], 51), BL(.4)],
+  galaxy:     [CM({ b: -.25, c: .25, s: .3 }), G(['#0b1040', '#3b1a8c', '#c21b9c', '#00b4c8'], 'screen', .7, 120), RG(.35, .6, .45, ['rgba(0,230,255,.45)', 'rgba(0,230,255,0)'], 'screen', 1), RG(.7, .3, .45, ['rgba(255,60,200,.5)', 'rgba(255,60,200,0)'], 'screen', 1), ST(160, 1.3, [WH, 'rgba(180,230,255,.9)', 'rgba(255,190,240,.9)'], 61), BL(.45)],
+  space:      [CM({ b: -.3, c: .3, s: -.1 }), T('#001a4d', 'screen', .18), VG(.6), ST(60, 1.2, [WH], 71), RG(.85, .15, .25, ['rgba(120,170,255,.55)', 'rgba(120,170,255,0)'], 'screen', 1)],
+  starry:     [CM({ b: -.15, c: .15 }), T('#0b1a5c', 'screen', .2), ST(90, 1.6, [WH, 'rgba(255,240,180,.95)'], 81), ST(10, 4, ['rgba(255,255,255,1)'], 82), BL(.6)],
+  fire:       [CM({ c: .25, s: .3 }), T('#ff4a10', 'overlay', .55), G(['rgba(255,60,0,0)', 'rgba(255,90,0,.55)'], 'screen', 1, 90), FL(40, ['rgba(255,150,20,.55)', 'rgba(255,70,10,.5)', 'rgba(255,210,60,.45)'], 91), BL(.6), NZ(.1)],
+  flame:      [CM({ c: .15, s: .15 }), T('#ff8a3a', 'soft-light', .5), FL(16, ['rgba(255,160,40,.5)', 'rgba(255,90,20,.45)'], 92), BL(.4)],
+  smoke:      [CM({ s: -.3, c: -.08 }), SM(14, 93), SF(.3), T('#8a8f99', 'soft-light', .3), NZ(.15)],
+  water:      [CM({ s: .05 }), T('#2aa8d8', 'soft-light', .55), WP(1, 1, 14, 9, .3), G(['rgba(255,255,255,.3)', 'rgba(255,255,255,0)'], 'screen', .7, 90), BL(.35)],
+  ice:        [CM({ s: -.3, c: .15, b: .06 }), T('#9fe4ff', 'soft-light', .7), T('#cfeeff', 'screen', .18), ST(60, 1.2, [WH, 'rgba(190,240,255,.95)'], 94), BL(.5), NZ(.12)],
+  glass:      [WP(0, 1.1, 0, 45, 0), WP(.6, 0, 30, 0, 0), F('rgb', .35), G(['rgba(255,255,255,.35)', 'rgba(255,255,255,0)', 'rgba(255,255,255,.15)'], 'screen', 1, 35), T('#dff3ff', 'soft-light', .3)],
+  mirror:     [MI(false)],
+  electric:   [CM({ b: -.12, c: .25, s: -.1 }), T('#2a5cff', 'screen', .2), BO(5, '#6ab8ff', 3), F('rgb', .35), BL(.7)],
+  cyberpunk:  [CM({ c: .3, s: .35 }), G(['#ff1fb4', '#00e6ff'], 'overlay', .7, 30), F('glitch', .45), SC(.15), BL(.55), VG(.4)],
+  matrix:     [CM({ g: 1, c: .5, b: -.1 }), T('#00ff66', 'multiply', 1), MX, SC(.2), BL(.5)],
+  anime:      [CM({ s: .35, c: .2, b: .05, p: 7 }), ED('line', [20, 20, 40], .9), SF(.2), BL(.35), ST(12, 2, [WH], 101)],
+  comic:      [CM({ s: .4, c: .35, p: 5 }), HT(110, true), ED('line', [0, 0, 0], 1.1)],
+  sketch:     [ED('sketch', null, 1), NZ(.1)],
+  doodle:     [CM({ b: .04, s: .1 }), DO(['#ffffff', '#ff7ac8', '#ffe14d', '#6be0ff'], 9)],
+  graffiti:   [CM({ c: .35, s: .5, p: 6 }), ED('line', [0, 0, 0], 1.2), SP(60, ['#ff2bd6', '#00e5ff', '#ffe14d', '#7dff3b'], 12)],
+  sticker:    [SK],
+  newspaper:  [CM({ g: 1, c: .35 }), HT(130, false, '#1b1b1b'), T('#e9dcc0', 'multiply', .55), NZ(.25), F('dust', .5)],
+  collage:    [TL(2)],
+  distortion: [BG(.55), WP(2.2, 2.2, 6, 5, 0), F('rgb', .55)]
+};
+function runRecipe(steps, x, w, h, k) {
+  const o = copyCanvas(x.canvas, 'rc');
+  steps.forEach(s => s(x, w, h));
+  const a = clamp(k * 1.3, 0, 1);
+  if (a < 1) { x.save(); x.globalAlpha = 1 - a; x.drawImage(o, 0, 0); x.restore(); }
+}
+function runEffect(id, ctx, w, h, k) {
+  k = clamp(k, 0.05, 1);
+  if (RC[id]) runRecipe(RC[id], ctx, w, h, k); else if (FX[id]) FX[id](ctx, w, h, k);
+}
 
 /* colour + glow + effect + grain */
 function post(ctx, w, h) {
@@ -636,33 +886,54 @@ function drawFrame(ctx, W, H, L, ph) {
 }
 
 /* render the final picture into ctx at W x H (raw = original look, no edits) */
-function renderInto(ctx, src, W, H, raw) {
+const geo = { key: '', c: null };
+/* geometry (crop + high-quality downscale) is the expensive part: cache it while only colour sliders move */
+function geoInto(ctx, src, w, h, cache) {
+  if (!cache) { geometry(ctx, src, w, h, st.crop, st.fx, st.fy); return; }
+  const key = [st.srcId, w, h, st.crop, st.fx.toFixed(5), st.fy.toFixed(5)].join('|');
+  if (geo.key !== key || !geo.c) {
+    if (!geo.c) geo.c = mk(w, h); else if (geo.c.width !== w || geo.c.height !== h) { geo.c.width = w; geo.c.height = h; }
+    geometry(geo.c.getContext('2d'), src, w, h, st.crop, st.fx, st.fy);
+    geo.key = key;
+  }
+  ctx.drawImage(geo.c, 0, 0);
+}
+
+function renderInto(ctx, src, W, H, raw, cache) {
   const L = layout(W, H);
   if (!L.f) {
-    geometry(ctx, src, W, H, st.crop, st.fx, st.fy);
+    geoInto(ctx, src, W, H, cache);
     if (!raw) post(ctx, W, H);
     return;
   }
-  const ph = mk(L.iw, L.ih), pc = ph.getContext('2d', { willReadFrequently: true });
-  geometry(pc, src, L.iw, L.ih, st.crop, st.fx, st.fy);
+  const ph = scratch('ph', L.iw, L.ih), pc = ph.getContext('2d', { willReadFrequently: true });
+  geoInto(pc, src, L.iw, L.ih, cache);
   if (!raw) post(pc, L.iw, L.ih);
   drawFrame(ctx, W, H, L, ph);
-  ph.width = ph.height = 0;
 }
 
 /* ================= preview ================= */
 function scheduleRender() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
+/* while a slider / drag is active render a lighter preview, then refine when the finger stops */
+let fastT = 0;
+function scheduleFast() {
+  st.fast = true;
+  clearTimeout(fastT);
+  fastT = setTimeout(() => { st.fast = false; scheduleRender(); }, 220);
+  scheduleRender();
+}
+const previewSide = () => st.fast ? 640 : PREVIEW_SIDE;
 
 function render() {
   if (!st.small) return;
   const { W, H } = outSize();
-  const sc = Math.min(1, PREVIEW_SIDE / Math.max(W, H));
+  const sc = Math.min(1, previewSide() / Math.max(W, H));
   const pw = Math.max(1, Math.round(W * sc)), ph = Math.max(1, Math.round(H * sc));
 
   if (cAfter.width !== pw || cAfter.height !== ph) { cAfter.width = pw; cAfter.height = ph; }
   const ctx = cAfter.getContext('2d', { willReadFrequently: true });
   ctx.clearRect(0, 0, pw, ph);
-  renderInto(ctx, st.small, pw, ph, false);
+  renderInto(ctx, st.small, pw, ph, false, true);
 
   const key = [pw, ph, st.crop, st.fx.toFixed(4), st.fy.toFixed(4), st.frame, st.caption].join('|');
   if (key !== beforeKey) {
@@ -684,6 +955,7 @@ function applyCompare() {
 
 function updateNote() {
   const parts = [];
+  if (st.tab === 'move') parts.push('Drag the photo to choose what stays visible.');
   if (st.note) parts.push(st.note);
   if (st.work) {
     const { W, H } = outSize();
@@ -761,13 +1033,13 @@ function slider(label, min, max, val, fmt, onInput) {
 }
 
 function buildSliders() {
-  const box = $('#sliders');
-  box.innerHTML = '';
-  SLIDERS.forEach(s => box.appendChild(slider(s.label, s.min, s.max, st[s.k], v => fmtVal(s, v), v => { st[s.k] = v; scheduleRender(); })));
+  const b1 = $('#sliders'), b2 = $('#sliders2');
+  b1.innerHTML = ''; b2.innerHTML = '';
+  SLIDERS.forEach(s => (s.g ? b2 : b1).appendChild(slider(s.label, s.min, s.max, st[s.k], v => fmtVal(s, v), v => { st[s.k] = v; scheduleFast(); })));
   const rs = $('#rowStrength'); rs.innerHTML = '';
-  rs.appendChild(slider('Filter strength', 0, 100, st.strength, v => v + '%', v => { st.strength = v; scheduleRender(); }));
+  rs.appendChild(slider('Filter strength', 0, 100, st.strength, v => v + '%', v => { st.strength = v; scheduleFast(); }));
   const rf = $('#rowFx'); rf.innerHTML = '';
-  rf.appendChild(slider('Effect strength', 0, 100, st.fxk, v => v + '%', v => { st.fxk = v; scheduleRender(); }));
+  rf.appendChild(slider('Effect strength', 0, 100, st.fxk, v => v + '%', v => { st.fxk = v; scheduleFast(); }));
 }
 
 function syncUI() {
@@ -780,7 +1052,6 @@ function syncUI() {
     $$('button', g).forEach(b => b.classList.toggle('on', b.dataset.v === st[k]));
   });
   $('#rowFx').hidden = st.effect === 'none';
-  $('#rowStrength').hidden = st.filter === 'none';
   $('#capRow').hidden = !curFrame().cap;
   const orig = st.platform === 'original';
   $('#cropBlk .seg').classList.toggle('dis', orig);
@@ -805,6 +1076,7 @@ function setTab(t) {
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   stage.classList.toggle('cmp', t === 'compare');
   stage.classList.toggle('move', t === 'move');
+  updateNote();
 }
 
 /* ================= stage interactions ================= */
@@ -827,7 +1099,7 @@ stage.addEventListener('pointermove', e => {
     if (ar > sw / sh) ch = sw / ar; else cw = sh * ar;
     if (sw - cw > 0.5) st.fx = clamp(drag.fx - ((e.clientX - drag.x) / r.width) * (W / L.iw) * cw / (sw - cw), 0, 1);
     if (sh - ch > 0.5) st.fy = clamp(drag.fy - ((e.clientY - drag.y) / r.height) * (H / L.ih) * ch / (sh - ch), 0, 1);
-    scheduleRender();
+    scheduleFast();
   }
 });
 const endDrag = () => { drag = null; };
@@ -876,8 +1148,7 @@ function adopt(work, name, note, platform) {
     small = mk(Math.round(tw * k), Math.round(th * k));
     drawScaled(small.getContext('2d'), work, 0, 0, tw, th, 0, 0, small.width, small.height);
   }
-  if (st.work && st.work !== work) st.work.width = st.work.height = 0;
-  if (st.small && st.small !== small && st.small !== st.work) st.small.width = st.small.height = 0;
+  st.srcId++;
   st.work = work; st.small = small; st.note = note || ''; st.name = name;
   if (platform) st.platform = platform;
   st.fx = st.fy = .5; beforeKey = '';
@@ -935,18 +1206,41 @@ async function doExport() {
     } else {
       toast('Saved ' + W + ' × ' + H + ' · ' + fmtSize(blob.size));
     }
-    const a = document.createElement('a');
+    const fname = st.name + '-' + (SLUG[st.platform] || 'photo') + '-PicalexHQ.' + ext;
     const url = URL.createObjectURL(blob);
-    const tag = st.platform === 'original' ? '' : '-' + st.platform;
-    a.href = url; a.download = st.name + tag + '-PicalexHQ.' + ext;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    if (/; wv\)/.test(navigator.userAgent)) {
+      openSheet(url, blob, fname);                 // Android WebView often ignores a[download]
+    } else {
+      const a = document.createElement('a');
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
   } catch (err) {
     toast('Export failed. Try a smaller format or a lower quality.');
   } finally {
     if (c) { c.width = c.height = 0; }
+    freeScratch();
     busy(false);
   }
+}
+const SLUG = { original: 'original', 'ig-story': 'story', 'ig-portrait': 'portrait', 'ig-square': 'square', tiktok: 'tiktok', 'fb-portrait': 'facebook' };
+
+let sheetUrl = '';
+function openSheet(url, blob, fname) {
+  sheetUrl = url;
+  $('#sheetImg').src = url;
+  const file = new File([blob], fname, { type: blob.type });
+  const can = navigator.canShare && navigator.canShare({ files: [file] });
+  const sb = $('#sheetShare');
+  sb.hidden = !can;
+  sb.onclick = () => { navigator.share({ files: [file] }).catch(() => {}); };
+  $('#sheet').hidden = false;
+}
+function closeSheet() {
+  $('#sheet').hidden = true;
+  $('#sheetImg').removeAttribute('src');
+  if (sheetUrl) { URL.revokeObjectURL(sheetUrl); sheetUrl = ''; }
 }
 function fmtSize(n) { return n > 1048576 ? (n / 1048576).toFixed(2) + ' MB' : Math.round(n / 1024) + ' KB'; }
 
@@ -998,6 +1292,8 @@ function drawCollage(ctx, W, H, preview) {
     }
   });
 }
+let colRaf = 0;
+function colSchedule() { if (!colRaf) colRaf = requestAnimationFrame(() => { colRaf = 0; colRender(); }); }
 function colRender() {
   const { W, H } = colSize(720);
   if (cCol.width !== W || cCol.height !== H) { cCol.width = W; cCol.height = H; }
@@ -1029,11 +1325,11 @@ function colUI() {
     });
     const ci = document.createElement('input');
     ci.type = 'color'; ci.value = '#0b0b0d'; ci.setAttribute('aria-label', 'Custom background');
-    ci.addEventListener('input', () => { col.bg = ci.value; colSync(); colRender(); });
+    ci.addEventListener('input', () => { col.bg = ci.value; colSync(); colSchedule(); });
     sw.appendChild(ci);
     $$('#cAr button').forEach(b => b.addEventListener('click', () => { col.ar = b.dataset.v; colSync(); colRender(); }));
-    $('#cGap').addEventListener('input', e => { col.gap = +e.target.value; $('#oGap').textContent = col.gap; colRender(); });
-    $('#cRad').addEventListener('input', e => { col.rad = +e.target.value; $('#oRad').textContent = col.rad; colRender(); });
+    $('#cGap').addEventListener('input', e => { col.gap = +e.target.value; $('#oGap').textContent = col.gap; colSchedule(); });
+    $('#cRad').addEventListener('input', e => { col.rad = +e.target.value; $('#oRad').textContent = col.rad; colSchedule(); });
   }
   colSync();
 }
@@ -1086,9 +1382,8 @@ async function colGo() {
     const { W, H } = colSize(1620);
     const c = mk(W, H);
     drawCollage(c.getContext('2d'), W, H, false);
-    adopt(c, 'collage', '', AR_PLATFORM[col.ar]);
     st.crop = 'cover';
-    syncUI();
+    adopt(c, 'collage', '', AR_PLATFORM[col.ar]);
   } finally { busy(false); }
 }
 
@@ -1103,7 +1398,7 @@ $$('#editor .seg').forEach(g => {
 $$('#tabs button').forEach(b => b.addEventListener('click', () => { setTab(b.dataset.tab); }));
 $('#resetAdj').addEventListener('click', () => {
   st.b = st.c = st.s = st.sharp = st.warm = st.vig = st.glow = st.grain = 0;
-  st.fade = st.clarity = st.hl = st.sh = 0;
+  st.shadows = st.highlights = st.clarity = st.fade = 0;
   st.strength = 100; st.fxk = 70;
   buildSliders(); scheduleRender();
 });
@@ -1120,6 +1415,7 @@ $('#cAdd').addEventListener('click', () => { col.active = -1; $('#fileCol').clic
 $('#cClear').addEventListener('click', () => { col.imgs = []; colRender(); });
 $('#cBack').addEventListener('click', () => show(st.work ? 'editor' : 'hero'));
 $('#cGo').addEventListener('click', colGo);
+$('#sheetClose').addEventListener('click', closeSheet);
 
 const drop = $('#drop');
 ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
@@ -1136,6 +1432,8 @@ buildCards('#frames', FRAMES, 'frame', p => p.desc,
   () => { st.fx = st.fy = .5; syncUI(); scheduleRender(); updateNote(); });
 buildChips('#filters', FILTERS, 'filter');
 buildChips('#effects', EFFECTS, 'effect');
+$('#effects').classList.add('fold');
+$('#fxMore').addEventListener('click', e => { const f = $('#effects').classList.toggle('fold'); e.target.textContent = f ? 'Show all effects' : 'Show fewer'; });
 buildSliders();
 syncUI();
 })();
