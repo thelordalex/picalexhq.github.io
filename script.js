@@ -975,7 +975,12 @@ function render() {
   if (cAfter.width !== pw || cAfter.height !== ph) { cAfter.width = pw; cAfter.height = ph; }
   const ctx = cAfter.getContext('2d', { willReadFrequently: true });
   ctx.clearRect(0, 0, pw, ph);
-  renderInto(ctx, st.small, pw, ph, false, true);
+  try { renderInto(ctx, st.small, pw, ph, false, true); }
+  catch (e) {                                   // never leave a black preview: fall back to the plain photo
+    ctx.clearRect(0, 0, pw, ph);
+    try { drawScaled(ctx, st.small, 0, 0, st.small.width, st.small.height, 0, 0, pw, ph); } catch (_) {}
+    toast('Preview fallback: ' + String(e && e.message || e).slice(0, 70));
+  }
 
   const key = [pw, ph, effCrop(), st.sizeBg, st.fx.toFixed(4), st.fy.toFixed(4), st.frame, st.caption].join('|');
   if (key !== beforeKey) {
@@ -1198,6 +1203,7 @@ async function toCanvas(file, maxSide) {
   return c;
 }
 
+let lastErr = null;
 function adopt(work, name, note, platform) {
   let small = work;
   const tw = work.width, th = work.height;
@@ -1211,11 +1217,13 @@ function adopt(work, name, note, platform) {
   if (platform) st.platform = platform;
   st.fx = st.fy = .5; beforeKey = '';
   st.custom = null;                       // a new photo starts from the Format preset
-  adoptT3();                             // and with a clean round-3 state (tools, looks, smart pick)
-  show('editor');
-  syncUI(); setTab('result');
-  render(); updateNote();
-  renderThumbs();
+  const safe = fn => { try { fn(); } catch (e) { lastErr = e; } };
+  safe(adoptT3);                         // clean round-3 state (tools, looks, smart pick)
+  show('editor');                        // always open the editor once the photo has decoded
+  safe(syncUI); safe(() => setTab('result'));
+  safe(render); safe(updateNote);
+  safe(renderThumbs);
+  if (lastErr) { const m = String(lastErr && lastErr.message || lastErr); lastErr = null; toast('Photo opened, but a step failed: ' + m.slice(0, 80)); }
 }
 
 async function loadFile(file) {
@@ -1237,7 +1245,7 @@ async function loadFile(file) {
     const name = (file.name || 'photo').replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'photo';
     adopt(work, name, note);
   } catch (err) {
-    toast('Could not open this image. Try another JPG, PNG or WEBP.');
+    toast('Could not open this image (' + String(err && err.message || err).slice(0, 60) + '). Try another JPG, PNG or WEBP.');
   } finally {
     busy(false);
   }
@@ -2838,4 +2846,6 @@ window.PX = {
   addEffect(id, name, steps) { RC[id] = Array.isArray(steps) ? steps : [steps]; upsert(EFFECTS, { id, name }); refreshLists(); },
   addFilter(id, name, p) { upsert(FILTERS, { id, name, p }); refreshLists(); }
 };
+/* extras.js calls these helpers as bare names (CM, NZ, G, ...): expose them as globals so it runs */
+Object.assign(window, { G, RG, VG, CM, ED, HT, ST, SC, WP, BG, MI, F, BL, NZ });
 })();
