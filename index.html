@@ -34,6 +34,7 @@
   <section id="stage">
     <canvas id="cBefore"></canvas>
     <canvas id="cAfter"></canvas>
+    <canvas id="cOv"></canvas>
     <div id="handle"></div>
     <div id="dims" class="pill"></div>
     <p id="note"></p>
@@ -43,7 +44,6 @@
     <button data-tab="result" class="on">Result</button>
     <button data-tab="compare">Compare</button>
     <button data-tab="move" id="tabMove" hidden>Reposition</button>
-    <button data-tab="restore" id="tabRestore" hidden>Restore</button>
   </nav>
 
   <section class="group">
@@ -88,36 +88,19 @@
     <p id="szNote" class="warn" hidden></p>
   </section>
 
-  <section class="group" id="cutGroup">
-    <h2>Remove background</h2>
-    <button id="bgToggle" class="btn ghost tt" type="button" aria-pressed="false">Remove background</button>
-    <div id="bgPanel" hidden>
-      <div class="seg gold" id="bgMode">
-        <button data-m="simple" class="on" type="button">Simple</button>
-        <button data-m="ai" type="button">AI model</button>
-      </div>
-      <p id="bgExplain" class="hint"></p>
-      <div id="bgAiBox" hidden>
-        <p id="bgAiInfo" class="hint"></p>
-        <progress id="bgAiProg" max="100" value="0" hidden></progress>
-        <button id="bgAiGo" class="btn ghost tt" type="button">Use AI model</button>
-      </div>
-      <div id="bgSimple">
-        <label class="chk" for="bgConn"><input id="bgConn" type="checkbox" checked><span>Only remove background that touches the photo edges</span></label>
-      </div>
-      <div id="bgSliders"></div>
-      <div class="rowline btns">
-        <button id="bgRestore" class="btn ghost tt" type="button">Restore brush</button>
-        <button id="bgUndo" class="btn ghost tt" type="button" disabled>Undo stroke</button>
-        <button id="bgClear" class="btn ghost tt" type="button" disabled>Clear brush</button>
-      </div>
-      <div id="bgFillRow" class="rowline">
-        <label for="bgFill">JPG fill colour</label>
-        <input id="bgFill" type="color" value="#ffffff">
-      </div>
-      <p id="bgFmtHint" class="hint"></p>
-    </div>
+  <section class="group" id="looksGroup">
+    <h2>Looks</h2>
+    <div id="smartBox" class="smart" hidden></div>
+    <div id="lookChips" class="chips"></div>
+    <div id="lookRow" hidden></div>
   </section>
+
+  <section class="group" id="toolsGroup">
+    <h2>Tools</h2>
+    <div id="toolGrid" class="tgrid"></div>
+    <div id="toolPanels"></div>
+  </section>
+
 
   <section class="group">
     <h2>Frame</h2>
@@ -201,6 +184,7 @@
 </section>
 
 <input id="file2" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+<input id="fileDx" type="file" accept="image/jpeg,image/png,image/webp" hidden>
 
 <div id="toast" role="status"></div>
 <div id="busy" hidden><div class="spin"></div><p id="busyTxt"></p></div>
