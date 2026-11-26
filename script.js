@@ -1176,7 +1176,7 @@ function moveCmp(e) {
 }
 
 /* ================= loading ================= */
-const isImg = f => /^image\/(jpeg|png|webp)$/.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name || '');
+const isImg = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|gif|avif|heic|heif|bmp|jfif|tiff?)$/i.test(f.name || '');
 
 function loadViaImg(file) {
   return new Promise((res, rej) => {
@@ -1583,6 +1583,7 @@ const T3 = {
   dxOn: false, dxImg: null, dxMode: 'screen', dxK: 60,
   txt: { on: false, str: '', size: 9, color: '#ffffff', font: 'sans', outline: true, shadow: true, k: 100, u: .5, v: .82 },
   frameK: 100,
+  layers: [],
   paint: null
 };
 function resetT3() {
@@ -1592,7 +1593,7 @@ function resetT3() {
     sel: [], brush: [], heal: [], lens: { k: 0, mode: 'radial', u: .5, v: .45, rad: .55 },
     styles: {}, bwTone: 'neu', dxOn: false, dxImg: null, dxMode: 'screen', dxK: 60,
     txt: { on: false, str: '', size: 9, color: '#ffffff', font: 'sans', outline: true, shadow: true, k: 100, u: .5, v: .82 },
-    frameK: 100, paint: null
+    frameK: 100, layers: [], paint: null
   });
   prep.key = ''; analysis = null;
 }
@@ -2156,6 +2157,7 @@ function px3top(ctx, W, H) {
     ctx.restore();
   }
   if (o.grain > 0.02) grain(ctx, W, H, o.grain);
+  drawLayers(ctx, W, H);
   drawText3(ctx, W, H);
 }
 const FONTS3 = {
@@ -2207,6 +2209,7 @@ const ICONS3 = {
   expand: IC('<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>'),
   hsl: IC('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M4 12h16"/>'),
   selcolor: IC('<circle cx="9" cy="10" r="5"/><circle cx="15" cy="10" r="5"/><circle cx="12" cy="15" r="5"/>'),
+  layers: IC('<path d="M12 4l8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/>'),
   selective: IC('<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/>'),
   brush: IC('<path d="M4 20c2 0 3-1 3-3l8-8 3 3-8 8c0 2-1 3-3 3z"/><path d="M14 6l3-3 4 4-3 3"/>'),
   heal: IC('<path d="M8 3v6a4 4 0 0 0 8 0V3"/><path d="M12 13v8M9 18h6"/>'),
@@ -2243,7 +2246,7 @@ const TOOLS3 = [
   { id: 'bw', name: 'Black & White', style: 'bw' }, { id: 'noir', name: 'Noir', style: 'noir' },
   { id: 'portrait', name: 'Portrait', style: 'portrait' }, { id: 'face', name: 'Face Enhance', style: 'face' },
   { id: 'lens', name: 'Lens Blur', paint: 'lens' }, { id: 'vig', name: 'Vignette' },
-  { id: 'dx', name: 'Double Exposure' }, { id: 'text', name: 'Text', paint: 'text' },
+  { id: 'layers', name: 'Layers & Stickers', paint: 'layers' }, { id: 'dx', name: 'Double Exposure' }, { id: 'text', name: 'Text', paint: 'text' },
   { id: 'framek', name: 'Frame Width' }
 ];
 let openPanelId = null;
@@ -2704,6 +2707,8 @@ function paintDown(e) {
     T3.lens.u = p.u; T3.lens.v = p.v;
   } else if (T3.paint === 'text') {
     T3.txt.u = p.u; T3.txt.v = p.v; paintDrag = { kind: 'text' };
+  } else if (T3.paint === 'layers') {
+    paintDrag = lyDown(e, p);
   }
   scheduleFast(); drawOverlay();
 }
@@ -2735,6 +2740,8 @@ function paintMove(e) {
     T3.cropR = r;
   } else if (paintDrag.kind === 'text') {
     uvClamp(p); T3.txt.u = p.u; T3.txt.v = p.v;
+  } else if (paintDrag.kind === 'layer') {
+    lyMove(e, p);
   }
   scheduleFast(); drawOverlay();
 }
@@ -2784,6 +2791,7 @@ function drawOverlay() {
     x.beginPath(); x.arc(X(p.u), Y(p.v), Math.max(8, p.r * Math.min(L.iw, L.ih) * sc), 0, 6.2832);
     x.strokeStyle = gold; x.setLineDash([4, 4]); x.stroke(); x.setLineDash([]);
   });
+  if (T3.paint === 'layers') drawLayerHandles(x, X, Y, L, sc, W, H);
   if (T3.paint === 'lens' && T3.lens.k > 0) {
     x.strokeStyle = gold;
     if (T3.lens.mode === 'radial') {
@@ -2890,9 +2898,299 @@ function smartRun() {
   box.hidden = false;
 }
 
+/* ================= round 4: layers, stickers, overlays, compositions, image import ================= */
+const LY = { sel: -1, uid: 0, color: '#ffffff', ptrs: new Map(), pin: null, ref: null };
+const rnd4 = seed => { let s = seed >>> 0 || 1; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; };
+const STK_COL = ['#ffffff', '#ffd1e8', '#ff5aa5', '#ffd23f', '#7be0ff', '#a98bff', '#8affc1', '#111111'];
+const mkS = (S, fn) => { const c = mk(S, S), x = c.getContext('2d'); fn(x, S); return c; };
+const poly = (x, pts) => { x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.closePath(); };
+const STK = [
+  { id: 'star', name: 'Star', draw: (x, S, c) => { const p = []; for (let i = 0; i < 10; i++) { const r = i % 2 ? S * .2 : S * .46, a = -Math.PI / 2 + i * Math.PI / 5; p.push([S / 2 + Math.cos(a) * r, S / 2 + Math.sin(a) * r]); } poly(x, p); x.fillStyle = c; x.fill(); } },
+  { id: 'sparkle', name: 'Sparkle', draw: (x, S, c) => { const m = S / 2; x.beginPath(); x.moveTo(m, S * .04); x.quadraticCurveTo(m, m, S * .96, m); x.quadraticCurveTo(m, m, m, S * .96); x.quadraticCurveTo(m, m, S * .04, m); x.quadraticCurveTo(m, m, m, S * .04); x.fillStyle = c; x.fill(); } },
+  { id: 'heart', name: 'Heart', draw: (x, S, c) => { x.beginPath(); x.moveTo(S / 2, S * .88); x.bezierCurveTo(S * .02, S * .55, S * .12, S * .1, S / 2, S * .32); x.bezierCurveTo(S * .88, S * .1, S * .98, S * .55, S / 2, S * .88); x.fillStyle = c; x.fill(); } },
+  { id: 'smile', name: 'Smiley', draw: (x, S, c) => { x.fillStyle = c; x.beginPath(); x.arc(S / 2, S / 2, S * .44, 0, 6.2832); x.fill(); x.strokeStyle = '#222'; x.lineWidth = S * .04; x.lineCap = 'round'; x.beginPath(); x.arc(S / 2, S * .54, S * .24, .2, Math.PI - .2); x.stroke(); x.fillStyle = '#222'; x.beginPath(); x.arc(S * .37, S * .4, S * .04, 0, 6.2832); x.arc(S * .63, S * .4, S * .04, 0, 6.2832); x.fill(); } },
+  { id: 'flower', name: 'Flower', draw: (x, S, c) => { x.fillStyle = c; for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; x.beginPath(); x.ellipse(S / 2 + Math.cos(a) * S * .22, S / 2 + Math.sin(a) * S * .22, S * .15, S * .11, a, 0, 6.2832); x.fill(); } x.fillStyle = '#ffcf3a'; x.beginPath(); x.arc(S / 2, S / 2, S * .1, 0, 6.2832); x.fill(); } },
+  { id: 'cloud', name: 'Cloud', draw: (x, S, c) => { x.fillStyle = c; x.beginPath(); x.arc(S * .32, S * .6, S * .18, 0, 6.2832); x.arc(S * .5, S * .45, S * .22, 0, 6.2832); x.arc(S * .7, S * .6, S * .18, 0, 6.2832); x.rect(S * .32, S * .6, S * .38, S * .18); x.fill(); } },
+  { id: 'bolt', name: 'Bolt', draw: (x, S, c) => { poly(x, [[.58, .04], [.2, .56], [.46, .56], [.38, .96], [.8, .4], [.54, .4]].map(p => [p[0] * S, p[1] * S])); x.fillStyle = c; x.fill(); } },
+  { id: 'bubble', name: 'Bubble', draw: (x, S, c) => { const g = x.createRadialGradient(S * .38, S * .36, S * .02, S / 2, S / 2, S * .46); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(.35, c); g.addColorStop(1, 'rgba(255,255,255,.35)'); x.fillStyle = g; x.beginPath(); x.arc(S / 2, S / 2, S * .44, 0, 6.2832); x.fill(); x.strokeStyle = 'rgba(255,255,255,.8)'; x.lineWidth = S * .015; x.stroke(); } },
+  { id: 'chrome', name: 'Chrome ✦', draw: (x, S) => { const m = S / 2; const g = x.createLinearGradient(0, 0, S, S); ['#fdfdff', '#8fa3b8', '#ffffff', '#5b6c80', '#e9f1f9'].forEach((k, i) => g.addColorStop(i / 4, k)); x.beginPath(); x.moveTo(m, S * .02); x.quadraticCurveTo(m, m, S * .98, m); x.quadraticCurveTo(m, m, m, S * .98); x.quadraticCurveTo(m, m, S * .02, m); x.quadraticCurveTo(m, m, m, S * .02); x.fillStyle = g; x.fill(); x.strokeStyle = 'rgba(40,50,70,.5)'; x.lineWidth = S * .012; x.stroke(); } },
+  { id: 'tape', name: 'Tape', draw: (x, S, c) => { const w = S * .86, h = S * .3, x0 = (S - w) / 2, y0 = (S - h) / 2; x.fillStyle = c; x.globalAlpha = .78; x.beginPath(); x.moveTo(x0, y0); for (let i = 0; i <= 8; i++) x.lineTo(x0 - (i % 2 ? 0 : S * .015), y0 + h * i / 8); x.lineTo(x0 + w, y0 + h); for (let i = 8; i >= 0; i--) x.lineTo(x0 + w + (i % 2 ? 0 : S * .015), y0 + h * i / 8); x.closePath(); x.fill(); } },
+  { id: 'arrow', name: 'Arrow', draw: (x, S, c) => { poly(x, [[.08, .4], [.55, .4], [.55, .2], [.94, .5], [.55, .8], [.55, .6], [.08, .6]].map(p => [p[0] * S, p[1] * S])); x.fillStyle = c; x.fill(); } },
+  { id: 'camera', name: 'Camera', draw: (x, S, c) => { x.fillStyle = c; x.beginPath(); x.roundRect ? x.roundRect(S * .08, S * .26, S * .84, S * .56, S * .08) : x.rect(S * .08, S * .26, S * .84, S * .56); x.fill(); x.fillRect(S * .3, S * .16, S * .22, S * .12); x.fillStyle = '#222'; x.beginPath(); x.arc(S / 2, S * .54, S * .19, 0, 6.2832); x.fill(); x.fillStyle = '#7ab'; x.beginPath(); x.arc(S / 2, S * .54, S * .11, 0, 6.2832); x.fill(); } },
+  { id: 'butterfly', name: 'Butterfly', draw: (x, S, c) => { x.fillStyle = c; [-1, 1].forEach(sd => { x.beginPath(); x.ellipse(S / 2 + sd * S * .22, S * .38, S * .22, S * .26, sd * -.5, 0, 6.2832); x.fill(); x.beginPath(); x.ellipse(S / 2 + sd * S * .17, S * .66, S * .14, S * .17, sd * .5, 0, 6.2832); x.fill(); }); x.fillStyle = '#222'; x.fillRect(S * .48, S * .2, S * .04, S * .6); } }
+];
+function stickerCanvas(id, color) { const d = STK.find(s => s.id === id); return mkS(256, (x, S) => d.draw(x, S, color)); }
+
+/* overlay generators: draw at the full photo size, blended by the layer's mode and opacity */
+const GENS = {
+  leak: { name: 'Warm leak', mode: 'screen', op: 80, draw: (x, W, H) => { [[0, .2, '#ff7a1a'], [1, .75, '#ff3a5a'], [.35, 0, '#ffc23a']].forEach(q => { const R = Math.max(W, H) * .6, g = x.createRadialGradient(q[0] * W, q[1] * H, 0, q[0] * W, q[1] * H, R); g.addColorStop(0, q[2]); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, W, H); }); } },
+  leak2: { name: 'Cool leak', mode: 'screen', op: 75, draw: (x, W, H) => { [[1, .1, '#ff6ad5'], [0, .9, '#6a8aff'], [.7, 1, '#6af0ff']].forEach(q => { const R = Math.max(W, H) * .6, g = x.createRadialGradient(q[0] * W, q[1] * H, 0, q[0] * W, q[1] * H, R); g.addColorStop(0, q[2]); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, W, H); }); } },
+  dust: { name: 'Dust', mode: 'screen', op: 70, draw: (x, W, H) => { const r = rnd4(7), u = W / 1080; x.fillStyle = '#fff'; for (let i = 0; i < 260; i++) { x.globalAlpha = .2 + r() * .6; x.beginPath(); x.arc(r() * W, r() * H, (.4 + r() * r() * 2.4) * u, 0, 6.2832); x.fill(); } x.strokeStyle = '#fff'; x.lineWidth = Math.max(1, u * .8); for (let i = 0; i < 18; i++) { x.globalAlpha = .25 + r() * .3; const px = r() * W, py = r() * H; x.beginPath(); x.moveTo(px, py); x.quadraticCurveTo(px + (r() - .5) * 40 * u, py + (r() - .5) * 40 * u, px + (r() - .5) * 60 * u, py + (r() - .5) * 60 * u); x.stroke(); } } },
+  scratch: { name: 'Scratches', mode: 'screen', op: 60, draw: (x, W, H) => { const r = rnd4(11), u = W / 1080; x.strokeStyle = '#fff'; for (let i = 0; i < 26; i++) { x.globalAlpha = .12 + r() * .35; x.lineWidth = Math.max(1, u * (.5 + r())); const px = r() * W; x.beginPath(); x.moveTo(px, 0); x.lineTo(px + (r() - .5) * 20 * u, H); x.stroke(); } } },
+  bokeh: { name: 'Bokeh', mode: 'screen', op: 70, draw: (x, W, H) => { const r = rnd4(3), u = W / 1080, cs = ['255,220,160', '255,170,210', '170,220,255', '255,255,255']; for (let i = 0; i < 28; i++) { const px = r() * W, py = r() * H, R = (24 + r() * r() * 110) * u, g = x.createRadialGradient(px, py, R * .6, px, py, R); const c = cs[i % 4]; g.addColorStop(0, 'rgba(' + c + ',.18)'); g.addColorStop(.85, 'rgba(' + c + ',.3)'); g.addColorStop(1, 'rgba(' + c + ',0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py, R, 0, 6.2832); x.fill(); } } },
+  burn: { name: 'Film burn', mode: 'screen', op: 85, draw: (x, W, H) => { const g = x.createLinearGradient(0, 0, W * .35, 0); g.addColorStop(0, 'rgba(255,90,10,.95)'); g.addColorStop(.4, 'rgba(255,170,30,.5)'); g.addColorStop(1, 'rgba(255,200,60,0)'); x.fillStyle = g; x.fillRect(0, 0, W, H); const g2 = x.createLinearGradient(W, 0, W * .8, 0); g2.addColorStop(0, 'rgba(255,60,40,.6)'); g2.addColorStop(1, 'rgba(255,60,40,0)'); x.fillStyle = g2; x.fillRect(0, 0, W, H); } },
+  paper: { name: 'Paper', mode: 'multiply', op: 55, draw: (x, W, H) => { x.fillStyle = '#e9dcc3'; x.fillRect(0, 0, W, H); const r = rnd4(5), u = Math.max(1, W / 540); for (let i = 0; i < 5000; i++) { x.fillStyle = r() > .5 ? 'rgba(120,90,50,.08)' : 'rgba(255,255,255,.12)'; x.fillRect(r() * W, r() * H, u * (1 + r() * 2), u); } } },
+  polaroid: { name: 'Polaroid frame', mode: 'source-over', op: 100, draw: (x, W, H) => { const s = W * .055, b = W * .17; x.fillStyle = '#f6f2ea'; x.beginPath(); x.rect(0, 0, W, H); x.rect(s, s, W - 2 * s, H - s - b); x.fill('evenodd'); x.strokeStyle = 'rgba(0,0,0,.18)'; x.lineWidth = Math.max(1, W / 540); x.strokeRect(s, s, W - 2 * s, H - s - b); } },
+  strip: { name: 'Film strip', mode: 'source-over', op: 100, draw: (x, W, H) => { const b = H * .085; x.fillStyle = '#0c0a09'; x.fillRect(0, 0, W, b); x.fillRect(0, H - b, W, b); x.fillStyle = '#e9e0cf'; const n = 14, hw = W / n * .46, hh = b * .42; for (let i = 0; i < n; i++) { const px = (i + .27) * W / n; [b * .29, H - b * .71].forEach(py => { x.beginPath(); x.roundRect ? x.roundRect(px, py, hw, hh, hh * .25) : x.rect(px, py, hw, hh); x.fill(); }); } } },
+  finder: { name: 'Viewfinder', mode: 'source-over', op: 100, draw: (x, W, H) => { const u = W / 1080, m = 60 * u, L = 70 * u; x.strokeStyle = '#fff'; x.lineWidth = 4 * u; x.shadowColor = 'rgba(0,0,0,.5)'; x.shadowBlur = 4 * u; [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]].forEach(q => { x.beginPath(); x.moveTo(q[0], q[1] + q[3] * L); x.lineTo(q[0], q[1]); x.lineTo(q[0] + q[2] * L, q[1]); x.stroke(); }); x.fillStyle = '#ff3b30'; x.beginPath(); x.arc(m + 18 * u, m + 52 * u, 10 * u, 0, 6.2832); x.fill(); x.fillStyle = '#fff'; x.font = 'bold ' + Math.round(34 * u) + 'px monospace'; x.fillText('REC', m + 38 * u, m + 64 * u); const d = new Date(); x.textAlign = 'right'; x.fillText(d.getFullYear() + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + String(d.getDate()).padStart(2, '0'), W - m - 6 * u, H - m - 14 * u); x.strokeRect(W - m - 80 * u, m + 28 * u, 62 * u, 28 * u); x.fillRect(W - m - 16 * u, m + 36 * u, 6 * u, 12 * u); x.fillRect(W - m - 76 * u, m + 32 * u, 40 * u, 20 * u); x.textAlign = 'left'; x.fillText('1x', m + 6 * u, H - m - 14 * u); } }
+};
+
+/* layer model: img (sticker / photo / text) or gen (overlay) */
+const newLy = o => Object.assign({ id: ++LY.uid, name: 'Layer', u: .5, v: .5, s: .4, rot: 0, op: 100, mode: 'source-over', flip: false, outline: false, shadow: false, hidden: false, cv: null, src0: null, gen: null, cache: null }, o);
+function addLy(l) { T3.layers.push(l); LY.sel = T3.layers.length - 1; if (LY.ref) LY.ref(); scheduleRender(); drawOverlay(); return l; }
+function addSticker(id, color, o) { const d = STK.find(s => s.id === id), cv = stickerCanvas(id, color || '#ffffff'); return addLy(newLy(Object.assign({ name: d.name, cv, src0: cv, s: id === 'tape' ? .34 : .26 }, o || {}))); }
+function addGen(id, o) { const g = GENS[id]; return addLy(newLy(Object.assign({ name: g.name, gen: id, mode: g.mode, op: g.op }, o || {}))); }
+function addImgCanvas(c, name) { const asp = c.width / c.height; return addLy(newLy({ name: name || 'Image', cv: c, src0: c, s: asp >= 1 ? .6 : clamp(.6 * asp * 1.1, .25, .6) })); }
+function addTextLy(str, color) {
+  const size = 160, c = mk(1, 1), x = c.getContext('2d'); x.font = 'bold ' + size + 'px system-ui,sans-serif';
+  const w = Math.ceil(x.measureText(str).width) + 40, h = size * 1.4; c.width = w; c.height = h;
+  const y = c.getContext('2d'); y.font = 'bold ' + size + 'px system-ui,sans-serif'; y.textBaseline = 'middle'; y.textAlign = 'center';
+  y.lineWidth = size * .08; y.strokeStyle = 'rgba(0,0,0,.55)'; y.lineJoin = 'round'; y.strokeText(str, w / 2, h / 2); y.fillStyle = color; y.fillText(str, w / 2, h / 2);
+  return addLy(newLy({ name: 'Text', cv: c, src0: c, s: clamp(w / 1700, .2, .8) }));
+}
+function lyDims(l, W) { const w = l.s * W; return { w, h: w * l.cv.height / l.cv.width }; }
+function genCanvas(l, W, H) {
+  const key = W + 'x' + H;
+  if (l.cache && l.cache.key === key) return l.cache.c;
+  const c = mk(W, H), x = c.getContext('2d'); GENS[l.gen].draw(x, W, H);
+  if (W <= 1800) l.cache = { key, c };
+  return c;
+}
+function drawLayers(ctx, W, H) {
+  const L = T3.layers; if (!L || !L.length) return;
+  L.forEach(l => {
+    if (l.hidden) return;
+    ctx.save(); ctx.globalAlpha = clamp(l.op, 0, 100) / 100; ctx.globalCompositeOperation = l.mode;
+    try {
+      if (l.gen) { ctx.drawImage(genCanvas(l, W, H), 0, 0, W, H); }
+      else if (l.cv) {
+        const d = lyDims(l, W);
+        ctx.translate(l.u * W, l.v * H); ctx.rotate(l.rot * Math.PI / 180); if (l.flip) ctx.scale(-1, 1);
+        if (l.shadow) { ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = W * .012; ctx.shadowOffsetY = W * .006; }
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(l.cv, -d.w / 2, -d.h / 2, d.w, d.h);
+      }
+    } catch (_) {}
+    ctx.restore();
+  });
+}
+function lyHit(u, v) {
+  const { W, H } = outSize();
+  for (let i = T3.layers.length - 1; i >= 0; i--) {
+    const l = T3.layers[i]; if (l.gen || l.hidden || !l.cv) continue;
+    const d = lyDims(l, W), a = -l.rot * Math.PI / 180, dx = u * W - l.u * W, dy = v * H - l.v * H;
+    const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+    if (Math.abs(lx) <= d.w / 2 + 8 && Math.abs(ly) <= d.h / 2 + 8) return i;
+  }
+  return -1;
+}
+function lyDown(e, p) {
+  LY.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const sel = T3.layers[LY.sel];
+  if (LY.ptrs.size >= 2 && sel && !sel.gen) {
+    const [a, b] = [...LY.ptrs.values()];
+    LY.pin = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, a: Math.atan2(b.y - a.y, b.x - a.x), s: sel.s, rot: sel.rot };
+    return { kind: 'layer' };
+  }
+  const hit = lyHit(p.u, p.v);
+  if (hit >= 0) { LY.sel = hit; const l = T3.layers[hit]; if (LY.ref) LY.ref(); return { kind: 'layer', du: l.u - p.u, dv: l.v - p.v }; }
+  return { kind: 'layer', none: true };
+}
+function lyMove(e, p) {
+  if (LY.ptrs.has(e.pointerId)) LY.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const l = T3.layers[LY.sel]; if (!l || l.gen) return;
+  if (LY.ptrs.size >= 2 && LY.pin) {
+    const [a, b] = [...LY.ptrs.values()];
+    l.s = clamp(LY.pin.s * Math.hypot(a.x - b.x, a.y - b.y) / LY.pin.d, .03, 3);
+    l.rot = LY.pin.rot + (Math.atan2(b.y - a.y, b.x - a.x) - LY.pin.a) * 180 / Math.PI;
+    return;
+  }
+  if (paintDrag && paintDrag.kind === 'layer' && !paintDrag.none && paintDrag.du !== undefined) { l.u = clamp(p.u + paintDrag.du, -.2, 1.2); l.v = clamp(p.v + paintDrag.dv, -.2, 1.2); }
+}
+['pointerup', 'pointercancel'].forEach(ev => stage.addEventListener(ev, e => { LY.ptrs.delete(e.pointerId); if (LY.ptrs.size < 2) LY.pin = null; if (LY.ref && T3.paint === 'layers') LY.ref(true); }));
+stage.addEventListener('wheel', e => {
+  if (T3.paint !== 'layers') return; const l = T3.layers[LY.sel]; if (!l || l.gen) return;
+  e.preventDefault(); l.s = clamp(l.s * (e.deltaY < 0 ? 1.06 : .94), .03, 3); scheduleFast(); drawOverlay(); if (LY.ref) LY.ref(true);
+}, { passive: false });
+function drawLayerHandles(x, X, Y, L, sc, W, H) {
+  const l = T3.layers[LY.sel]; if (!l || l.gen || l.hidden || !l.cv) return;
+  const d = lyDims(l, L.iw), cx = X(l.u), cy = Y(l.v), w = d.w * sc, h = d.h * sc;
+  x.save(); x.translate(cx, cy); x.rotate(l.rot * Math.PI / 180);
+  x.strokeStyle = '#f0a33c'; x.lineWidth = 2; x.setLineDash([6, 5]); x.strokeRect(-w / 2, -h / 2, w, h); x.setLineDash([]);
+  x.fillStyle = '#f0a33c'; [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(q => x.fillRect(q[0] * w / 2 - 4, q[1] * h / 2 - 4, 8, 8));
+  x.restore();
+}
+
+/* ---- image input: any size, many formats, files / paste / URL / drag from other pages ---- */
+async function fileToLayerCanvas(f) {
+  const { bmp, w, h } = await decode(f);
+  const mx = 1600, k = Math.min(1, mx / Math.max(w, h)), tw = Math.max(1, Math.round(w * k)), th = Math.max(1, Math.round(h * k));
+  const c = mk(tw, th); drawScaled(c.getContext('2d'), bmp, 0, 0, w, h, 0, 0, tw, th); if (bmp.close) bmp.close();
+  return c;
+}
+async function addImageFiles(files) {
+  const arr = [...files].slice(0, 12); if (!arr.length) return;
+  busy(true, 'Adding image' + (arr.length > 1 ? 's' : '') + '…'); await tick();
+  let ok = 0, bad = 0;
+  for (const f of arr) { try { addImgCanvas(await fileToLayerCanvas(f), (f.name || 'Image').replace(/\.[^.]+$/, '').slice(0, 18)); ok++; } catch (_) { bad++; } }
+  busy(false);
+  toast(ok ? (ok + ' added' + (bad ? ', ' + bad + ' could not be read' : '') + '. Drag to move, pinch to resize and rotate.') : 'Could not read that image. Try saving it first, then pick the file.');
+}
+async function addImageUrl(url) {
+  url = String(url || '').trim();
+  if (!/^https?:\/\//i.test(url)) { toast('Paste a direct image link (starts with https://).'); return; }
+  busy(true, 'Fetching image…'); await tick();
+  try {
+    const r = await fetch(url, { mode: 'cors' }); if (!r.ok) throw new Error('http ' + r.status);
+    const b = await r.blob(); if (!/^image\//.test(b.type)) throw new Error('not an image');
+    busy(false); await addImageFiles([new File([b], 'web-image', { type: b.type })]);
+  } catch (_) { busy(false); toast('That site does not allow loading its image from here. Long-press the image, save it, then use "Pick images".'); }
+}
+async function addFromClipboard() {
+  try {
+    if (navigator.clipboard && navigator.clipboard.read) {
+      const items = await navigator.clipboard.read();
+      for (const it of items) { const t = it.types.find(q => /^image\//.test(q)); if (t) { await addImageFiles([new File([await it.getType(t)], 'pasted', { type: t })]); return; } }
+    }
+    if (navigator.clipboard && navigator.clipboard.readText) { const tx = await navigator.clipboard.readText(); if (/^https?:\/\//i.test(tx.trim())) { await addImageUrl(tx); return; } }
+    toast('No image or image link in the clipboard. Copy an image first.');
+  } catch (_) { toast('Paste is blocked here. Copy the image, then press Ctrl+V / long-press in the link box, or pick the saved file.'); }
+}
+window.addEventListener('paste', e => {
+  if (view !== 'editor' || !st.work) return;
+  const cd = e.clipboardData; if (!cd) return;
+  const files = [...(cd.files || [])].filter(f => /^image\//.test(f.type));
+  if (files.length) { e.preventDefault(); if (openPanelId === 'layers') addImageFiles(files); else { openTool('layers'); addImageFiles(files); } return; }
+  const tx = cd.getData && cd.getData('text/plain');
+  if (tx && /^https?:\/\/\S+$/i.test(tx.trim()) && openPanelId === 'layers' && !/INPUT|TEXTAREA/.test((e.target || {}).tagName || '')) { e.preventDefault(); addImageUrl(tx); }
+});
+
+/* remove a plain background: flood fill from the borders by colour distance (no AI) */
+function removeBgLy(l, tol) {
+  const s = l.src0, w = s.width, h = s.height, c = mk(w, h), x = c.getContext('2d'); x.drawImage(s, 0, 0);
+  const im = x.getImageData(0, 0, w, h), d = im.data;
+  const corner = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]].map(q => { const i = (q[1] * w + q[0]) * 4; return [d[i], d[i + 1], d[i + 2], d[i + 3]]; });
+  const ref = [0, 1, 2].map(k => Math.round(corner.reduce((a, q) => a + q[k], 0) / 4));
+  const T = tol * 4.4, T2 = T * T, seen = new Uint8Array(w * h), st2 = new Int32Array(w * h); let sp = 0;
+  const near = p => { const i = p * 4; if (d[i + 3] < 8) return true; const dr = d[i] - ref[0], dg = d[i + 1] - ref[1], db = d[i + 2] - ref[2]; return dr * dr + dg * dg + db * db <= T2; };
+  const push = p => { if (!seen[p] && near(p)) { seen[p] = 1; st2[sp++] = p; } };
+  for (let i = 0; i < w; i++) { push(i); push((h - 1) * w + i); } for (let j = 0; j < h; j++) { push(j * w); push(j * w + w - 1); }
+  while (sp) { const p = st2[--sp], px = p % w; if (px > 0) push(p - 1); if (px < w - 1) push(p + 1); if (p >= w) push(p - w); if (p < w * (h - 1)) push(p + w); }
+  for (let p = 0; p < w * h; p++) if (seen[p]) d[p * 4 + 3] = 0;
+  /* soften the cut: pixels next to removed ones fade by 50% */
+  for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const p = y * w + X; if (!seen[p] && (seen[p - 1] || seen[p + 1] || seen[p - w] || seen[p + w])) d[p * 4 + 3] = Math.round(d[p * 4 + 3] * .55); }
+  x.putImageData(im, 0, 0);
+  l.base = c; applyOutline(l);
+}
+function applyOutline(l) {
+  const src = l.base || l.src0;
+  if (!l.outline) { l.cv = src; return; }
+  const pad = Math.round(Math.max(src.width, src.height) * .035), c = mk(src.width + pad * 2, src.height + pad * 2), x = c.getContext('2d');
+  const sil = mk(src.width, src.height), sx = sil.getContext('2d'); sx.drawImage(src, 0, 0); sx.globalCompositeOperation = 'source-in'; sx.fillStyle = '#fff'; sx.fillRect(0, 0, sil.width, sil.height);
+  for (let i = 0; i < 24; i++) { const a = i / 24 * 6.2832; x.drawImage(sil, pad + Math.cos(a) * pad, pad + Math.sin(a) * pad); }
+  x.drawImage(src, pad, pad); l.cv = c;
+}
+
+/* ---- panel ---- */
+const COMPS = [
+  { id: 'polaroid', name: 'Polaroid + tape', build: () => { addGen('paper', { op: 35 }); addGen('polaroid'); addSticker('tape', '#ffd1e8', { u: .2, v: .06, rot: -32, s: .3 }); addSticker('tape', '#7be0ff', { u: .82, v: .07, rot: 28, s: .3 }); } },
+  { id: 'scrap', name: 'Scrapbook', build: () => { addGen('paper', { op: 55 }); addSticker('tape', '#ffd23f', { u: .5, v: .04, rot: 3, s: .34 }); addSticker('star', '#ffd23f', { u: .86, v: .86, rot: 14, s: .16 }); addSticker('heart', '#ff5aa5', { u: .12, v: .88, rot: -12, s: .15 }); addSticker('flower', '#ffffff', { u: .9, v: .12, rot: 10, s: .16 }); addGen('dust'); } },
+  { id: 'filmstrip', name: 'Film strip', build: () => { addGen('strip'); addGen('burn', { op: 45 }); addGen('dust'); addGen('scratch', { op: 35 }); } },
+  { id: 'y2k', name: 'Y2K collage', build: () => { addGen('leak2', { op: 55 }); addSticker('chrome', '#fff', { u: .15, v: .15, s: .2, rot: -10 }); addSticker('chrome', '#fff', { u: .85, v: .78, s: .26, rot: 12 }); addSticker('bubble', '#ff9ad5', { u: .82, v: .14, s: .16 }); addSticker('bubble', '#9ad7ff', { u: .2, v: .84, s: .13 }); addSticker('butterfly', '#ff7ac8', { u: .5, v: .9, s: .17, rot: 12 }); addSticker('sparkle', '#ffffff', { u: .65, v: .2, s: .08 }); } },
+  { id: 'digicam', name: 'Digicam screen', build: () => { addGen('finder'); addGen('dust', { op: 40 }); } },
+  { id: 'dreamy', name: 'Dreamy', build: () => { addGen('leak', { op: 55 }); addGen('bokeh'); addSticker('sparkle', '#ffffff', { u: .2, v: .2, s: .1 }); addSticker('sparkle', '#fff2a0', { u: .8, v: .3, s: .08 }); addSticker('heart', '#ffd1e8', { u: .75, v: .85, s: .12, rot: 10 }); } }
+];
+const mkBtn = (t, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small ' + (cls || 'ghost'); b.textContent = t; b.addEventListener('click', fn); return b; };
+const mkRow = () => { const r = document.createElement('div'); r.className = 'rowline btns'; return r; };
+const secT = t => { const h = document.createElement('p'); h.className = 'lysec'; h.textContent = t; return h; };
+PANELS.layers = p => {
+  const cur = () => T3.layers[LY.sel];
+  const upd = () => { scheduleFast(); drawOverlay(); };
+  p.appendChild(hint3('Drag a layer to move it. Pinch with two fingers to resize and rotate (mouse wheel on desktop). Overlays cover the whole photo.'));
+  /* add images */
+  p.appendChild(secT('Images and stickers'));
+  const fi = document.createElement('input'); fi.type = 'file'; fi.accept = 'image/*'; fi.multiple = true; fi.hidden = true;
+  fi.addEventListener('change', () => { addImageFiles(fi.files); fi.value = ''; });
+  p.appendChild(fi);
+  const r1 = mkRow(); r1.appendChild(mkBtn('＋ Pick images', () => fi.click(), 'primary')); r1.appendChild(mkBtn('Paste', addFromClipboard)); p.appendChild(r1);
+  const ur = document.createElement('div'); ur.className = 'rowline';
+  const ui = document.createElement('input'); ui.type = 'url'; ui.placeholder = 'Paste an image link (Pinterest image URL)…'; ui.className = 'txtIn';
+  ur.appendChild(ui); ur.appendChild(mkBtn('Load', () => { addImageUrl(ui.value); })); p.appendChild(ur);
+  p.appendChild(hint3('Pinterest: long-press an image there, Save, then Pick images. Or copy the image and press Paste. You can also drop images here from another tab.'));
+  /* built-in stickers */
+  const cols = document.createElement('div'); cols.className = 'swrow';
+  STK_COL.forEach(c => { const b = document.createElement('button'); b.type = 'button'; b.innerHTML = '<i style="background:' + c + '"></i>'; b.setAttribute('aria-label', c); if (c === LY.color) b.classList.add('on'); b.addEventListener('click', () => { LY.color = c; $$('button', cols).forEach(q => q.classList.toggle('on', q === b)); }); cols.appendChild(b); });
+  p.appendChild(cols);
+  const stk = document.createElement('div'); stk.className = 'stkgrid';
+  STK.forEach(d => { const b = document.createElement('button'); b.type = 'button'; b.className = 'stkbtn'; b.setAttribute('aria-label', d.name); const c = stickerCanvas(d.id, d.id === 'smile' || d.id === 'camera' ? '#ffd23f' : '#c9c2b6'); c.getContext('2d'); b.appendChild(c); c.style.width = '100%'; b.addEventListener('click', () => addSticker(d.id, LY.color)); stk.appendChild(b); });
+  p.appendChild(stk);
+  const tr = document.createElement('div'); tr.className = 'rowline';
+  const ti = document.createElement('input'); ti.type = 'text'; ti.maxLength = 30; ti.placeholder = 'Text sticker…'; ti.className = 'txtIn';
+  tr.appendChild(ti); tr.appendChild(mkBtn('Add', () => { if (ti.value.trim()) { addTextLy(ti.value.trim(), LY.color === '#111111' ? '#111111' : LY.color); ti.value = ''; } })); p.appendChild(tr);
+  /* overlays + compositions */
+  p.appendChild(secT('Overlays'));
+  const ov = document.createElement('div'); ov.className = 'seg gold segwrap';
+  Object.keys(GENS).forEach(id => ov.appendChild(mkBtn(GENS[id].name, () => addGen(id), 'ghost')));
+  p.appendChild(ov);
+  p.appendChild(secT('Compositions'));
+  const cp = document.createElement('div'); cp.className = 'seg gold segwrap';
+  COMPS.forEach(cm => cp.appendChild(mkBtn(cm.name, () => { cm.build(); toast(cm.name + ' added. Every piece is a layer you can edit.'); }, 'ghost')));
+  p.appendChild(cp);
+  /* layer list + controls */
+  p.appendChild(secT('Layers (top first)'));
+  const list = document.createElement('div'); list.className = 'lylist'; p.appendChild(list);
+  const ctl = document.createElement('div'); p.appendChild(ctl);
+  const rebuild = light => {
+    if (light === true) { const l = cur(); if (l && ctl._s) { ctl._s.forEach(f => f()); } return; }
+    list.innerHTML = '';
+    if (!T3.layers.length) { const e = document.createElement('p'); e.className = 'hint'; e.textContent = 'No layers yet.'; list.appendChild(e); }
+    for (let i = T3.layers.length - 1; i >= 0; i--) {
+      const l = T3.layers[i], row = document.createElement('div'); row.className = 'lyrow' + (i === LY.sel ? ' on' : '');
+      const th = document.createElement('button'); th.type = 'button'; th.className = 'lyname'; th.textContent = (l.gen ? '▦ ' : '') + l.name + (l.hidden ? ' (hidden)' : '');
+      th.addEventListener('click', () => { LY.sel = i; rebuild(); drawOverlay(); });
+      row.appendChild(th);
+      const mb = (t, fn, al) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'lyb'; b.textContent = t; b.setAttribute('aria-label', al); b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); row.appendChild(b); };
+      mb('▲', () => { if (i < T3.layers.length - 1) { [T3.layers[i], T3.layers[i + 1]] = [T3.layers[i + 1], T3.layers[i]]; if (LY.sel === i) LY.sel = i + 1; rebuild(); scheduleRender(); } }, 'Move up');
+      mb('▼', () => { if (i > 0) { [T3.layers[i], T3.layers[i - 1]] = [T3.layers[i - 1], T3.layers[i]]; if (LY.sel === i) LY.sel = i - 1; rebuild(); scheduleRender(); } }, 'Move down');
+      mb(l.hidden ? '○' : '●', () => { l.hidden = !l.hidden; rebuild(); scheduleRender(); }, 'Show or hide');
+      mb('✕', () => { T3.layers.splice(i, 1); LY.sel = Math.min(LY.sel, T3.layers.length - 1); rebuild(); scheduleRender(); drawOverlay(); }, 'Delete');
+      list.appendChild(row);
+    }
+    ctl.innerHTML = ''; ctl._s = [];
+    const l = cur(); if (!l) return;
+    const bind = (label, min, max, get, set, fmt) => { const el = sl3(label, min, max, get, v => { set(v); drawOverlay(); }, fmt); ctl.appendChild(el); const inp = $('input', el), out = $('output', el); ctl._s.push(() => { inp.value = get(); out.textContent = (fmt || String)(+inp.value); }); };
+    if (!l.gen) {
+      bind('Size', 3, 200, () => Math.round(l.s * 100), v => l.s = v / 100, v => v + '%');
+      bind('Rotate', -180, 180, () => Math.round(((l.rot + 540) % 360) - 180), v => l.rot = v, v => v + '°');
+    }
+    bind('Opacity', 0, 100, () => l.op, v => l.op = v, v => v + '%');
+    ctl.appendChild(chipRow([['source-over', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'], ['soft-light', 'Soft light'], ['lighten', 'Lighten'], ['difference', 'Difference']], l.mode, v => { l.mode = v; scheduleRender(); }));
+    const rb = mkRow();
+    if (!l.gen) {
+      rb.appendChild(mkBtn('Flip', () => { l.flip = !l.flip; scheduleRender(); }));
+      const ot = mkBtn(l.outline ? 'White outline: on' : 'White outline', () => { l.outline = !l.outline; applyOutline(l); rebuild(); scheduleRender(); }); rb.appendChild(ot);
+      rb.appendChild(mkBtn(l.shadow ? 'Shadow: on' : 'Shadow', () => { l.shadow = !l.shadow; rebuild(); scheduleRender(); }));
+    }
+    rb.appendChild(mkBtn('Duplicate', () => { const c = Object.assign({}, l, { id: ++LY.uid, u: Math.min(1, l.u + .05), v: Math.min(1, l.v + .05), cache: null }); T3.layers.splice(LY.sel + 1, 0, c); LY.sel++; rebuild(); scheduleRender(); }));
+    ctl.appendChild(rb);
+    if (!l.gen && l.src0) {
+      ctl.appendChild(secT('Cut out a plain background'));
+      let tol = 22;
+      ctl.appendChild(sl3('Tolerance', 4, 60, () => tol, v => tol = v));
+      const cr = mkRow();
+      cr.appendChild(mkBtn('Remove background colour', () => { busy(true, 'Cutting out…'); setTimeout(() => { try { removeBgLy(l, tol); scheduleRender(); toast('Removed. Raise tolerance for soft backgrounds, or press Restore.'); } catch (_) { toast('Could not cut this image out.'); } busy(false); }, 30); }));
+      cr.appendChild(mkBtn('Restore', () => { l.base = null; applyOutline(l); scheduleRender(); }));
+      ctl.appendChild(cr);
+      ctl.appendChild(hint3('Works best on white or single-colour backgrounds. It starts from the picture edges, so colours inside the subject stay. No AI.'));
+    }
+  };
+  LY.ref = rebuild; rebuild();
+};
+
 /* called from adopt(): every new photo starts with a clean round-3 state */
 function adoptT3() {
   resetT3();
+  LY.sel = -1; if (LY.ref) LY.ref();
   syncLooksUI();
   renderLookThumbs();
   smartRun();
@@ -2937,8 +3235,12 @@ const drop = $('#drop');
 ['dragleave', 'drop'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === document.documentElement) drop.classList.remove('over'); }));
 window.addEventListener('drop', e => {
   const fl = e.dataTransfer && e.dataTransfer.files;
-  if (!fl || !fl.length) return;
-  if (view === 'collage') { col.active = -1; colFiles(fl); } else loadFile(fl[0]);
+  if (!fl || !fl.length) {
+    const u = e.dataTransfer && (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'));
+    if (u && view === 'editor' && openPanelId === 'layers' && /^https?:\/\//i.test(u.trim())) addImageUrl(u.split('\n')[0]);
+    return;
+  }
+  if (view === 'collage') { col.active = -1; colFiles(fl); } else if (view === 'editor' && openPanelId === 'layers') addImageFiles(fl); else loadFile(fl[0]);
 });
 
 buildCards('#platforms', PLATFORMS, 'platform', p => p.id === 'original' ? 'Keep dimensions' : p.w + ' × ' + p.h,
