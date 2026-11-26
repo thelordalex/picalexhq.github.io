@@ -1604,6 +1604,7 @@ function resetT3() {
     frameK: 100, layers: [], paint: null
   });
   prep.key = ''; analysis = null;
+  try { resetExt(); } catch (_) {}
 }
 const prepActive = () => !!(T3.cropR || T3.rot || T3.rotQ || T3.flipH || T3.flipV || T3.perspV || T3.perspH || T3.expand);
 const prepSig = () => [
@@ -2149,6 +2150,7 @@ function px3local(ctx, W, H) {
   applyFaceFx(ctx, W, H);
   applySel(ctx, W, H);
   applyBrush(ctx, W, H);
+  applyExt(ctx, W, H);
 }
 
 /* ---- finishing layers: style overlays, double exposure, text ---- */
@@ -2292,15 +2294,34 @@ function openTool(id) {
   drawOverlay();
 }
 function buildToolsUI() {
+  TOOLS3.forEach(addToolBtn);
+}
+function addToolBtn(t) {
   const g = $('#toolGrid');
-  TOOLS3.forEach(t => {
-    const b = document.createElement('button');
-    b.className = 'tbtn'; b.type = 'button'; b.dataset.id = t.id;
-    b.innerHTML = ICONS3[t.id] + '<span></span>';
-    $('span', b).textContent = t.name;
-    b.addEventListener('click', () => { if (!st.work) { toast('Choose a photo first.'); return; } openTool(t.id); });
-    g.appendChild(b);
+  const b = document.createElement('button');
+  b.className = 'tbtn'; b.type = 'button'; b.dataset.id = t.id;
+  b.innerHTML = (ICONS3[t.id] || '') + '<span></span>';
+  $('span', b).textContent = t.name;
+  b.addEventListener('click', () => { if (!st.work) { toast('Choose a photo first.'); return; } openTool(t.id); });
+  g.appendChild(b);
+}
+/* round 5: extension tools (extras3.js). Each tool: {id,name,icon,panel(el),apply(ctx,W,H),reset(),paint:{down,move,overlay}} */
+const TOOLX = new Map();
+function applyExt(ctx, W, H) { TOOLX.forEach(t => { if (t.apply) { try { t.apply(ctx, W, H); } catch (e) { console.warn('tool ' + t.id, e); } } }); }
+function resetExt() {
+  TOOLX.forEach(t => {
+    if (t.reset) t.reset();
+    if (panelEls[t.id]) { panelEls[t.id].remove(); delete panelEls[t.id]; if (openPanelId === t.id) openPanelId = null; }
   });
+}
+function addExtTool(t) {
+  if (!t || !t.id || TOOLX.has(t.id)) return;
+  TOOLX.set(t.id, t);
+  const def = { id: t.id, name: t.name };
+  if (t.paint) def.paint = 'ext';
+  TOOLS3.push(def); ICONS3[t.id] = t.icon ? IC(t.icon) : IC('<circle cx="12" cy="12" r="7"/>');
+  PANELS[t.id] = t.panel;
+  addToolBtn(def);
 }
 /* small helper for the panels: a labelled slider bound live */
 const sl3 = (label, min, max, get, set, fmt) =>
@@ -2728,6 +2749,9 @@ function paintDown(e) {
     T3.txt.u = p.u; T3.txt.v = p.v; paintDrag = { kind: 'text' };
   } else if (T3.paint === 'layers') {
     paintDrag = lyDown(e, p);
+  } else if (T3.paint === 'ext') {
+    const t = TOOLX.get(openPanelId);
+    if (t && t.paint && t.paint.down) { const r = t.paint.down(p, e); paintDrag = r ? { kind: 'ext', t } : null; }
   }
   scheduleFast(); drawOverlay();
 }
@@ -2761,6 +2785,8 @@ function paintMove(e) {
     uvClamp(p); T3.txt.u = p.u; T3.txt.v = p.v;
   } else if (paintDrag.kind === 'layer') {
     lyMove(e, p);
+  } else if (paintDrag.kind === 'ext') {
+    if (paintDrag.t.paint.move) paintDrag.t.paint.move(p, e);
   }
   scheduleFast(); drawOverlay();
 }
@@ -2811,6 +2837,7 @@ function drawOverlay() {
     x.strokeStyle = gold; x.setLineDash([4, 4]); x.stroke(); x.setLineDash([]);
   });
   if (T3.paint === 'layers') drawLayerHandles(x, X, Y, L, sc, W, H);
+  if (T3.paint === 'ext') { const t = TOOLX.get(openPanelId); if (t && t.paint && t.paint.overlay) t.paint.overlay(x, X, Y, L, sc, W, H); }
   if (T3.paint === 'lens' && T3.lens.k > 0) {
     x.strokeStyle = gold;
     if (T3.lens.mode === 'radial') {
@@ -3040,7 +3067,7 @@ function drawLayerHandles(x, X, Y, L, sc, W, H) {
   x.restore();
 }
 
-/* ---- image input: any size, many formats, files / paste / URL / drag from other pages ---- */
+/* ---- image input: any size, many formats, files / paste / drag ---- */
 async function fileToLayerCanvas(f) {
   const { bmp, w, h } = await decode(f);
   const mx = 1600, k = Math.min(1, mx / Math.max(w, h)), tw = Math.max(1, Math.round(w * k)), th = Math.max(1, Math.round(h * k));
@@ -3055,33 +3082,20 @@ async function addImageFiles(files) {
   busy(false);
   toast(ok ? (ok + ' added' + (bad ? ', ' + bad + ' could not be read' : '') + '. Drag to move, pinch to resize and rotate.') : 'Could not read that image. Try saving it first, then pick the file.');
 }
-async function addImageUrl(url) {
-  url = String(url || '').trim();
-  if (!/^https?:\/\//i.test(url)) { toast('Paste a direct image link (starts with https://).'); return; }
-  busy(true, 'Fetching image…'); await tick();
-  try {
-    const r = await fetch(url, { mode: 'cors' }); if (!r.ok) throw new Error('http ' + r.status);
-    const b = await r.blob(); if (!/^image\//.test(b.type)) throw new Error('not an image');
-    busy(false); await addImageFiles([new File([b], 'web-image', { type: b.type })]);
-  } catch (_) { busy(false); toast('That site does not allow loading its image from here. Long-press the image, save it, then use "Pick images".'); }
-}
 async function addFromClipboard() {
   try {
     if (navigator.clipboard && navigator.clipboard.read) {
       const items = await navigator.clipboard.read();
       for (const it of items) { const t = it.types.find(q => /^image\//.test(q)); if (t) { await addImageFiles([new File([await it.getType(t)], 'pasted', { type: t })]); return; } }
     }
-    if (navigator.clipboard && navigator.clipboard.readText) { const tx = await navigator.clipboard.readText(); if (/^https?:\/\//i.test(tx.trim())) { await addImageUrl(tx); return; } }
-    toast('No image or image link in the clipboard. Copy an image first.');
-  } catch (_) { toast('Paste is blocked here. Copy the image, then press Ctrl+V / long-press in the link box, or pick the saved file.'); }
+    toast('No image in the clipboard. Copy an image first.');
+  } catch (_) { toast('Paste is blocked here. Save the image, then use Pick images.'); }
 }
 window.addEventListener('paste', e => {
   if (view !== 'editor' || !st.work) return;
   const cd = e.clipboardData; if (!cd) return;
   const files = [...(cd.files || [])].filter(f => /^image\//.test(f.type));
   if (files.length) { e.preventDefault(); if (openPanelId === 'layers') addImageFiles(files); else { openTool('layers'); addImageFiles(files); } return; }
-  const tx = cd.getData && cd.getData('text/plain');
-  if (tx && /^https?:\/\/\S+$/i.test(tx.trim()) && openPanelId === 'layers' && !/INPUT|TEXTAREA/.test((e.target || {}).tagName || '')) { e.preventDefault(); addImageUrl(tx); }
 });
 
 /* remove a plain background: flood fill from the borders by colour distance (no AI) */
@@ -3132,10 +3146,7 @@ PANELS.layers = p => {
   fi.addEventListener('change', () => { addImageFiles(fi.files); fi.value = ''; });
   p.appendChild(fi);
   const r1 = mkRow(); r1.appendChild(mkBtn('＋ Pick images', () => fi.click(), 'primary')); r1.appendChild(mkBtn('Paste', addFromClipboard)); p.appendChild(r1);
-  const ur = document.createElement('div'); ur.className = 'rowline';
-  const ui = document.createElement('input'); ui.type = 'url'; ui.placeholder = 'Paste an image link (Pinterest image URL)…'; ui.className = 'txtIn';
-  ur.appendChild(ui); ur.appendChild(mkBtn('Load', () => { addImageUrl(ui.value); })); p.appendChild(ur);
-  p.appendChild(hint3('Pinterest: long-press an image there, Save, then Pick images. Or copy the image and press Paste. You can also drop images here from another tab.'));
+  p.appendChild(hint3('Pinterest: long-press an image, Save, then Pick images (or copy the image and press Paste).'));
   /* built-in stickers */
   const cols = document.createElement('div'); cols.className = 'swrow';
   STK_COL.forEach(c => { const b = document.createElement('button'); b.type = 'button'; b.innerHTML = '<i style="background:' + c + '"></i>'; b.setAttribute('aria-label', c); if (c === LY.color) b.classList.add('on'); b.addEventListener('click', () => { LY.color = c; $$('button', cols).forEach(q => q.classList.toggle('on', q === b)); }); cols.appendChild(b); });
@@ -3255,8 +3266,6 @@ const drop = $('#drop');
 window.addEventListener('drop', e => {
   const fl = e.dataTransfer && e.dataTransfer.files;
   if (!fl || !fl.length) {
-    const u = e.dataTransfer && (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'));
-    if (u && view === 'editor' && openPanelId === 'layers' && /^https?:\/\//i.test(u.trim())) addImageUrl(u.split('\n')[0]);
     return;
   }
   if (view === 'collage') { col.active = -1; colFiles(fl); } else if (view === 'editor' && openPanelId === 'layers') addImageFiles(fl); else loadFile(fl[0]);
@@ -3285,7 +3294,11 @@ function refreshLists() {
 window.PX = {
   T, G, RG, VG, CM, ED, HT, ST, DO, BO, FL, SM, RY, SP, MX, SC, WP, BG, MI, SF, TL, SK, TX, RD, F, BL, NZ, D1, D2, D3, WH, RB,
   addEffect(id, name, steps) { RC[id] = Array.isArray(steps) ? steps : [steps]; upsert(EFFECTS, { id, name }); refreshLists(); },
-  addFilter(id, name, p) { upsert(FILTERS, { id, name, p }); refreshLists(); }
+  addFilter(id, name, p) { upsert(FILTERS, { id, name, p }); refreshLists(); },
+  /* round 5 */
+  addTool: addExtTool,
+  ui: { sl: sl3, hint: hint3, chipRow, fast: scheduleFast, render: scheduleRender, overlay: drawOverlay, toast, mk, scratch, clamp, outSize, closeTool },
+  hasPhoto: () => !!st.work
 };
 /* extras.js calls these helpers as bare names (CM, NZ, G, ...): expose them as globals so it runs */
 Object.assign(window, { G, RG, VG, CM, ED, HT, ST, SC, WP, BG, MI, F, BL, NZ });
