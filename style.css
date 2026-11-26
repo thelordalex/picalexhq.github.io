@@ -378,3 +378,9 @@ input[type=range]::-moz-range-thumb{width:12px;height:28px;border-radius:2px;bac
   .group{padding:30px 20px 20px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation-duration:.01ms!important}}
+
+/* round 4: HSL / Selective Color band picker */
+.bandrow{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.bandbtn{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:6px 10px;border:1px solid var(--line2);border-radius:3px;background:transparent;color:var(--text);font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.bandbtn i{width:14px;height:14px;border-radius:2px;display:block;border:1px solid rgba(255,255,255,.35)}
+.bandbtn.on{border-color:var(--acc);color:var(--acc);background:var(--gold-soft)}
