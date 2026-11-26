@@ -829,6 +829,7 @@ function post(ctx, w, h) {
   const e = curEff();
   process(ctx, w, h, e);
   px3color(ctx, w, h);
+  px4color(ctx, w, h);
   bloom(ctx, w, h, e.glow);
   if (st.effect !== 'none') runEffect(st.effect, ctx, w, h, st.fxk / 100);
   px3local(ctx, w, h);
@@ -1573,6 +1574,7 @@ const T3 = {
   look: 'none', lookK: 100,
   amb: 0, temp: 0, tint: 0, struct: 0,
   curves: null,                       // sorted [[x,y]..] 0..1, y up
+  cch: { r: null, g: null, b: null }, hsl: null, sc: null,
   cropR: null, rot: 0, rotQ: 0, flipH: false, flipV: false,
   perspV: 0, perspH: 0, expand: 0,
   sel: [], brush: [], heal: [],
@@ -1585,7 +1587,7 @@ const T3 = {
 };
 function resetT3() {
   Object.assign(T3, {
-    look: 'none', lookK: 100, amb: 0, temp: 0, tint: 0, struct: 0, curves: null,
+    look: 'none', lookK: 100, amb: 0, temp: 0, tint: 0, struct: 0, curves: null, cch: { r: null, g: null, b: null }, hsl: null, sc: null,
     cropR: null, rot: 0, rotQ: 0, flipH: false, flipV: false, perspV: 0, perspH: 0, expand: 0,
     sel: [], brush: [], heal: [], lens: { k: 0, mode: 'radial', u: .5, v: .45, rad: .55 },
     styles: {}, bwTone: 'neu', dxOn: false, dxImg: null, dxMode: 'screen', dxK: 60,
@@ -1758,6 +1760,75 @@ function buildCurLut(pts) {
     lut[i] = clamp(Math.round(y * 255), 0, 255);
   }
   return lut;
+}
+
+
+/* ---- round 4: HSL (8 colour bands), Selective Color (CMYK per band) and R/G/B curves in one pixel pass ---- */
+const BANDS4 = [['red', 'Red', 0, '#e0453a'], ['orange', 'Orange', 30, '#e8903a'], ['yellow', 'Yellow', 60, '#e6d03a'], ['green', 'Green', 120, '#4cb85a'],
+  ['aqua', 'Aqua', 180, '#3ac8c8'], ['blue', 'Blue', 225, '#3a6ee0'], ['purple', 'Purple', 270, '#8a4ce0'], ['magenta', 'Magenta', 320, '#e04cb4']];
+const SCX4 = [['whites', 'Whites'], ['neutrals', 'Neutrals'], ['blacks', 'Blacks']];
+const emptyHSL = () => BANDS4.map(() => ({ h: 0, s: 0, l: 0 }));
+const emptySC = () => BANDS4.concat(SCX4).map(() => ({ c: 0, m: 0, y: 0, k: 0 }));
+function hslOn() { return !!(T3.hsl && T3.hsl.some(b => b.h || b.s || b.l)); }
+function scOn() { return !!(T3.sc && T3.sc.some(b => b.c || b.m || b.y || b.k)); }
+function px4color(ctx, w, h) {
+  const lr = buildCurLut(T3.cch.r), lg = buildCurLut(T3.cch.g), lb = buildCurLut(T3.cch.b);
+  const hOn = hslOn(), sOn = scOn();
+  if (!lr && !lg && !lb && !hOn && !sOn) return;
+  const img = ctx.getImageData(0, 0, w, h), d = img.data, n = w * h * 4;
+  const cen = BANDS4.map(b => b[2]);
+  const wt = new Float32Array(8);
+  const HS = T3.hsl, SC4 = T3.sc;
+  for (let i = 0; i < n; i += 4) {
+    let r = d[i], g = d[i + 1], b = d[i + 2];
+    if (lr) r = lr[r]; if (lg) g = lg[g]; if (lb) b = lb[b];
+    if (hOn || sOn) {
+      const mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const df = mx - mn, L = (mx + mn) / 510;
+      const sat = df === 0 ? 0 : df / (255 - Math.abs(mx + mn - 255));
+      let hue = 0;
+      if (df) {
+        if (mx === r) hue = ((g - b) / df) % 6; else if (mx === g) hue = (b - r) / df + 2; else hue = (r - g) / df + 4;
+        hue *= 60; if (hue < 0) hue += 360;
+      }
+      const chroma = Math.min(1, sat * 2.2) * (1 - Math.abs(2 * L - 1) * .6);
+      let tw = 0;
+      if (chroma > 0.002) {
+        for (let k = 0; k < 8; k++) {
+          let dd = Math.abs(hue - cen[k]); if (dd > 180) dd = 360 - dd;
+          const nxt = Math.abs(cen[(k + 1) % 8] - cen[k]), prv = Math.abs(cen[(k + 7) % 8] - cen[k]);
+          const span = Math.max(30, Math.min(nxt > 180 ? 360 - nxt : nxt, prv > 180 ? 360 - prv : prv)) * 1.15;
+          const q = 1 - dd / span; wt[k] = q > 0 ? q * q * (3 - 2 * q) * chroma : 0; tw += wt[k];
+        }
+      } else wt.fill(0);
+      if (hOn && tw > 0) {
+        let dh = 0, ds = 0, dl = 0;
+        for (let k = 0; k < 8; k++) if (wt[k]) { dh += HS[k].h * wt[k]; ds += HS[k].s * wt[k]; dl += HS[k].l * wt[k]; }
+        if (dh || ds || dl) {
+          let H2 = (hue + dh * .3 + 360) % 360, S2 = clamp(sat * (1 + ds / 100), 0, 1), L2 = clamp(L + dl / 100 * .35 * (1 - Math.abs(2 * L - 1) * .5), 0, 1);
+          const C = (1 - Math.abs(2 * L2 - 1)) * S2, X = C * (1 - Math.abs((H2 / 60) % 2 - 1)), m = L2 - C / 2;
+          let R, G2, B;
+          const hi = (H2 / 60) | 0;
+          if (hi === 0) { R = C; G2 = X; B = 0; } else if (hi === 1) { R = X; G2 = C; B = 0; } else if (hi === 2) { R = 0; G2 = C; B = X; }
+          else if (hi === 3) { R = 0; G2 = X; B = C; } else if (hi === 4) { R = X; G2 = 0; B = C; } else { R = C; G2 = 0; B = X; }
+          r = (R + m) * 255; g = (G2 + m) * 255; b = (B + m) * 255;
+        }
+      }
+      if (sOn) {
+        const lum = (r * .2126 + g * .7152 + b * .0722) / 255;
+        let dr = 0, dg = 0, db = 0;
+        const apply = (q, a) => { if (!a) return; dr -= q.c * a; dg -= q.m * a; db -= q.y * a; const kk = q.k * a; dr -= kk; dg -= kk; db -= kk; };
+        for (let k = 0; k < 8; k++) if (wt[k]) apply(SC4[k], wt[k]);
+        const sm = (a, bb, x) => { const t = clamp((x - a) / (bb - a), 0, 1); return t * t * (3 - 2 * t); };
+        apply(SC4[8], sm(.62, 1, lum));
+        apply(SC4[9], (1 - sm(.0, .25, sat)) * (1 - Math.abs(2 * lum - 1)));
+        apply(SC4[10], 1 - sm(.05, .38, lum));
+        r += dr * .6; g += dg * .6; b += db * .6;
+      }
+    }
+    d[i] = r < 0 ? 0 : r > 255 ? 255 : r; d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g; d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 /* ---- image analysis: runs once per photo on the small canvas; drives Looks + Smart pick ---- */
@@ -2134,6 +2205,8 @@ const ICONS3 = {
   rotate: IC('<path d="M20 12a8 8 0 1 1-3-6"/><path d="M17 2v4h-4"/>'),
   persp: IC('<path d="M6 4h12l2 16H4z"/><path d="M9 8h6M8 12h8M7 16h10"/>'),
   expand: IC('<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>'),
+  hsl: IC('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M4 12h16"/>'),
+  selcolor: IC('<circle cx="9" cy="10" r="5"/><circle cx="15" cy="10" r="5"/><circle cx="12" cy="15" r="5"/>'),
   selective: IC('<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/>'),
   brush: IC('<path d="M4 20c2 0 3-1 3-3l8-8 3 3-8 8c0 2-1 3-3 3z"/><path d="M14 6l3-3 4 4-3 3"/>'),
   heal: IC('<path d="M8 3v6a4 4 0 0 0 8 0V3"/><path d="M12 13v8M9 18h6"/>'),
@@ -2158,7 +2231,7 @@ const ICONS3 = {
 
 const TOOLS3 = [
   { id: 'tune', name: 'Tune Image' }, { id: 'details', name: 'Details' },
-  { id: 'curves', name: 'Curves' }, { id: 'wb', name: 'White Balance' },
+  { id: 'curves', name: 'Curves' }, { id: 'hsl', name: 'HSL' }, { id: 'selcolor', name: 'Selective Color' }, { id: 'wb', name: 'White Balance' },
   { id: 'crop', name: 'Crop', paint: 'crop' }, { id: 'rotate', name: 'Rotate' },
   { id: 'persp', name: 'Perspective' }, { id: 'expand', name: 'Expand' },
   { id: 'selective', name: 'Selective', paint: 'sel' }, { id: 'brush', name: 'Brush', paint: 'brush' },
@@ -2302,7 +2375,10 @@ PANELS.crop = p => {
 let cropAr = 0;
 
 /* curves editor: tap to add a point, drag to move, drag a point out to remove */
-let cvCanvas = null, cvDrag = -1;
+let cvCanvas = null, cvDrag = -1, cvCh = 'm';
+const CVC = { m: '#d4a95f', r: '#ff6a5a', g: '#6adf7a', b: '#6aa8ff' };
+const getCV = () => cvCh === 'm' ? T3.curves : T3.cch[cvCh];
+const setCV = v => { if (cvCh === 'm') T3.curves = v; else T3.cch[cvCh] = v; };
 function drawCurveEditor() {
   const cv = cvCanvas; if (!cv) return;
   const x = cv.getContext('2d'), S = cv.width;
@@ -2315,15 +2391,15 @@ function drawCurveEditor() {
   }
   x.strokeStyle = 'rgba(255,255,255,.16)';
   x.beginPath(); x.moveTo(0, S); x.lineTo(S, 0); x.stroke();
-  const lut = buildCurLut(T3.curves);
-  x.strokeStyle = '#d4a95f'; x.lineWidth = 2; x.beginPath();
+  const lut = buildCurLut(getCV());
+  x.strokeStyle = CVC[cvCh]; x.lineWidth = 2; x.beginPath();
   for (let i = 0; i < 256; i++) {
     const px = i / 255 * S, py = (1 - (lut ? lut[i] : i) / 255) * S;
     i ? x.lineTo(px, py) : x.moveTo(px, py);
   }
   x.stroke();
-  (T3.curves || []).forEach(q => {
-    x.fillStyle = '#d4a95f';
+  (getCV() || []).forEach(q => {
+    x.fillStyle = CVC[cvCh];
     x.beginPath(); x.arc(q[0] * S, (1 - q[1]) * S, 7, 0, 6.2832); x.fill();
     x.fillStyle = '#1a1408';
     x.beginPath(); x.arc(q[0] * S, (1 - q[1]) * S, 3, 0, 6.2832); x.fill();
@@ -2337,7 +2413,7 @@ PANELS.curves = p => {
   cvCanvas = mk(240, 240); cvCanvas.className = 'curveEd';
   cvCanvas.addEventListener('pointerdown', e => {
     cvCanvas.setPointerCapture(e.pointerId);
-    const [u, v] = cvPos(e), pts = T3.curves || (T3.curves = [[0, 0], [1, 1]]);
+    const [u, v] = cvPos(e); let pts = getCV(); if (!pts) { pts = [[0, 0], [1, 1]]; setCV(pts); }
     cvDrag = pts.findIndex(q => Math.hypot(q[0] - u, q[1] - v) < .07);
     if (cvDrag < 0) {
       pts.push([u, v]); pts.sort((a, b) => a[0] - b[0]);
@@ -2347,7 +2423,7 @@ PANELS.curves = p => {
   });
   cvCanvas.addEventListener('pointermove', e => {
     if (cvDrag < 0) return;
-    const [u, v] = cvPos(e), pts = T3.curves;
+    const [u, v] = cvPos(e), pts = getCV(); if (!pts) return;
     if (v < -.12 && cvDrag > 0 && cvDrag < pts.length - 1) { pts.splice(cvDrag, 1); cvDrag = -1; }
     else {
       const lo = cvDrag > 0 ? pts[cvDrag - 1][0] + .01 : 0, hi = cvDrag < pts.length - 1 ? pts[cvDrag + 1][0] - .01 : 1;
@@ -2357,17 +2433,60 @@ PANELS.curves = p => {
   });
   ['pointerup', 'pointercancel'].forEach(ev => cvCanvas.addEventListener(ev, () => {
     cvDrag = -1;
-    if (T3.curves && T3.curves.length <= 2 && T3.curves.every((q, i) => Math.abs(q[0] - q[1]) < .01 && Math.abs(q[0] - i) < .01)) T3.curves = null;
-    if (T3.curves && T3.curves.length < 2) T3.curves = null;
+    const cp = getCV();
+    if (cp && cp.length <= 2 && cp.every((q, i) => Math.abs(q[0] - q[1]) < .01 && Math.abs(q[0] - i) < .01)) setCV(null);
+    else if (cp && cp.length < 2) setCV(null);
     drawCurveEditor(); scheduleRender();
   }));
+  p.appendChild(chipRow([['m', 'RGB'], ['r', 'Red'], ['g', 'Green'], ['b', 'Blue']], cvCh, v => { cvCh = v; drawCurveEditor(); }));
   p.appendChild(cvCanvas);
+  const pre = [['S-curve', [[0, 0], [.25, .19], [.75, .82], [1, 1]]], ['Fade', [[0, .08], [.5, .52], [1, .94]]], ['Lift shadows', [[0, 0], [.2, .27], [1, 1]]], ['Crush', [[0, 0], [.3, .22], [.7, .78], [1, 1]]]];
+  p.appendChild(chipRow(pre.map((q, i) => [String(i), q[0]]), '', v => { setCV(pre[+v][1].map(q => q.slice())); drawCurveEditor(); scheduleRender(); }));
   p.appendChild(hint3('Tap to add a point, drag to shape the tones. Drag a point below the box to delete it.'));
   const rs = document.createElement('button'); rs.className = 'btn link'; rs.type = 'button'; rs.textContent = 'Reset curve';
-  rs.addEventListener('click', () => { T3.curves = null; drawCurveEditor(); scheduleRender(); });
+  rs.addEventListener('click', () => { setCV(null); drawCurveEditor(); scheduleRender(); });
   p.appendChild(rs);
   setTimeout(drawCurveEditor, 0);
 };
+
+
+function bandPanel(kind) {
+  return p => {
+    let cur = 0;
+    const list = kind === 'hsl' ? BANDS4 : BANDS4.concat(SCX4.map(q => [q[0], q[1], 0, '#9a9a9a']));
+    const sw = document.createElement('div'); sw.className = 'bandrow';
+    const box = document.createElement('div');
+    const get = () => { if (kind === 'hsl') return T3.hsl || (T3.hsl = emptyHSL()); return T3.sc || (T3.sc = emptySC()); };
+    const build = () => {
+      box.innerHTML = '';
+      const o = () => get()[cur];
+      if (kind === 'hsl') {
+        box.appendChild(sl3('Hue', -100, 100, () => o().h, v => o().h = v));
+        box.appendChild(sl3('Saturation', -100, 100, () => o().s, v => o().s = v));
+        box.appendChild(sl3('Luminance', -100, 100, () => o().l, v => o().l = v));
+      } else {
+        box.appendChild(sl3('Cyan', -100, 100, () => o().c, v => o().c = v));
+        box.appendChild(sl3('Magenta', -100, 100, () => o().m, v => o().m = v));
+        box.appendChild(sl3('Yellow', -100, 100, () => o().y, v => o().y = v));
+        box.appendChild(sl3('Black', -100, 100, () => o().k, v => o().k = v));
+      }
+    };
+    list.forEach((b, i) => {
+      const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'bandbtn' + (i === 0 ? ' on' : '');
+      bt.innerHTML = '<i></i><span></span>'; bt.firstChild.style.background = b[3]; bt.lastChild.textContent = b[1];
+      bt.addEventListener('click', () => { cur = i; $$('button', sw).forEach(x => x.classList.toggle('on', x === bt)); build(); });
+      sw.appendChild(bt);
+    });
+    p.appendChild(hint3(kind === 'hsl' ? 'Pick a colour, then shift its hue, saturation and brightness without touching the rest.' : 'Pick a colour range (or whites / neutrals / blacks) and push its CMYK balance, like print colour correction.'));
+    p.appendChild(sw); p.appendChild(box);
+    const rs = document.createElement('button'); rs.className = 'btn link'; rs.type = 'button'; rs.textContent = 'Reset ' + (kind === 'hsl' ? 'HSL' : 'Selective Color');
+    rs.addEventListener('click', () => { if (kind === 'hsl') T3.hsl = null; else T3.sc = null; build(); scheduleRender(); });
+    p.appendChild(rs);
+    build();
+  };
+}
+PANELS.hsl = bandPanel('hsl');
+PANELS.selcolor = bandPanel('sc');
 
 /* style panels (HDR Scape .. Face Enhance): one strength slider each; BW adds tone filters */
 function stylePanel(id) {
@@ -2729,6 +2848,7 @@ async function postHeavy(ctx, w, h) {
     process(ctx, w, h, e);
     px3color(ctx, w, h);
   }
+  px4color(ctx, w, h);
   bloom(ctx, w, h, e.glow);
   if (st.effect !== 'none') runEffect(st.effect, ctx, w, h, st.fxk / 100);
   px3local(ctx, w, h);
