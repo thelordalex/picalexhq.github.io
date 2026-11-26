@@ -64,7 +64,11 @@ img,canvas{display:block}
 .btn.link{background:none;border:0;color:var(--acc);padding:8px 0;min-height:44px;justify-content:flex-start;text-transform:none;letter-spacing:.02em;font-size:13px}
 
 /* ---------- hero ---------- */
-#hero{display:flex;align-items:center;justify-content:center;min-height:100svh;padding:24px}
+#hero{display:flex;align-items:center;justify-content:center;min-height:100svh;padding:24px;
+  background:linear-gradient(180deg,rgba(13,12,11,.55) 0%,rgba(13,12,11,.62) 45%,rgba(13,12,11,.82) 100%),url(bg.jpg) center/cover no-repeat,var(--bg)}
+#hero[hidden]{display:none}
+#hero h1,#hero .tag{text-shadow:0 2px 14px rgba(0,0,0,.65)}
+.dropzone{-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .hero-in{width:min(100%,460px);display:flex;flex-direction:column;gap:16px;align-items:stretch;text-align:left}
 #hero h1{
   font:400 clamp(44px,12vw,64px)/.95 var(--serif);margin:0;letter-spacing:-.03em;font-style:italic;
