@@ -384,3 +384,18 @@ input[type=range]::-moz-range-thumb{width:12px;height:28px;border-radius:2px;bac
 .bandbtn{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:6px 10px;border:1px solid var(--line2);border-radius:3px;background:transparent;color:var(--text);font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
 .bandbtn i{width:14px;height:14px;border-radius:2px;display:block;border:1px solid rgba(255,255,255,.35)}
 .bandbtn.on{border-color:var(--acc);color:var(--acc);background:var(--gold-soft)}
+
+/* round 4: layers and stickers panel */
+.lysec{margin:14px 0 6px;font:700 11px/1.3 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--acc)}
+.stkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.stkbtn{padding:6px;min-height:44px;border:1px solid var(--line2);border-radius:3px;background:var(--bg);cursor:pointer}
+.stkbtn:active{border-color:var(--acc)}
+.lylist{display:flex;flex-direction:column;gap:4px;margin:6px 0 10px}
+.lyrow{display:flex;align-items:center;gap:4px;border:1px solid var(--line2);border-radius:3px;background:var(--bg)}
+.lyrow.on{border-color:var(--acc);background:var(--gold-soft)}
+.lyname{flex:1;min-height:44px;padding:0 10px;text-align:left;background:transparent;border:0;color:var(--text);font:600 12px/1 var(--mono);letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.lyb{width:44px;min-height:44px;background:transparent;border:0;border-left:1px solid var(--line);color:var(--muted);font-size:14px;cursor:pointer}
+.lyb:active{color:var(--acc)}
+.tpanel .swrow button.on{outline:2px solid var(--acc);outline-offset:2px}
+.tpanel .rowline input.txtIn,.tpanel input[type=url].txtIn{flex:1 1 auto;min-width:0}
+.tpanel .swrow{flex-wrap:wrap}
