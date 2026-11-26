@@ -1406,26 +1406,34 @@ function colSync() {
 }
 const nextEmpty = (from) => { const n = colSlots(); for (let i = Math.max(0, from); i < n; i++) if (!col.imgs[i]) return i; return -1; };
 
-async function colFiles(list) {
+let colQueue = Promise.resolve();
+function colFiles(list) {
   const files = Array.from(list || []).filter(isImg);
-  if (!files.length) { if (list && list.length) toast('Please choose JPG, PNG or WEBP images.'); return; }
-  busy(true, 'Loading photos…');
-  await tick();
-  try {
-    let idx = col.active >= 0 ? col.active : nextEmpty(0);
-    for (const f of files) {
-      if (idx < 0 || idx >= colSlots()) idx = nextEmpty(0);
-      if (idx < 0) { toast('All tiles are filled. Tap a tile to replace it.'); break; }
-      col.imgs[idx] = await toCanvas(f, COL_SIDE);
-      idx = nextEmpty(0);
+  if (!files.length) { if (list && list.length) toast('Please choose JPG, PNG or WEBP images.'); return Promise.resolve(); }
+  const run = async () => {
+    busy(true, 'Loading photos…');
+    await tick();
+    let failed = 0;
+    try {
+      let idx = col.active >= 0 ? col.active : nextEmpty(0);
+      for (const f of files) {
+        if (idx < 0 || idx >= colSlots()) idx = nextEmpty(0);
+        if (idx < 0) { toast('All tiles are filled. Tap a tile to replace it.'); break; }
+        try {
+          col.imgs[idx] = await toCanvas(f, COL_SIDE);
+          idx = nextEmpty(0);
+        } catch (_) { failed++; }
+      }
+    } finally {
+      col.active = -1;
+      busy(false);
+      colRender();
     }
-  } catch (err) {
-    toast('Could not open one of the images.');
-  } finally {
-    col.active = -1;
-    busy(false);
-    colRender();
-  }
+    if (failed) toast(failed >= files.length ? 'Could not open one of the images.' : 'Some photos could not be opened.');
+  };
+  const p = colQueue.then(run, run);
+  colQueue = p.catch(() => {});
+  return p;
 }
 
 cCol.addEventListener('click', e => {
@@ -2560,7 +2568,7 @@ let healSize = 6;
 PANELS.lens = p => {
   p.appendChild(chipRow([['radial', 'Radial'], ['linear', 'Linear']], T3.lens.mode, v => { T3.lens.mode = v; scheduleFast(); drawOverlay(); }));
   p.appendChild(sl3('Strength', 0, 100, () => T3.lens.k, v => T3.lens.k = v, v => v + '%'));
-  p.appendChild(sl3('Focus size', 15, 100, () => T3.lens.rad * 100, v => T3.lens.rad = v / 100, v => v + '%'));
+  p.appendChild(sl3('Focus size', 15, 100, () => Math.round(T3.lens.rad * 100), v => T3.lens.rad = v / 100, v => v + '%'));
   p.appendChild(hint3('Tap the photo to place the focus point.'));
 };
 
@@ -2649,6 +2657,17 @@ function buildLooksUI() {
 }
 async function renderLookThumbs() {
   if (!st.small) return;
+  const ncv = $('#lookChips .fchip[data-id="none"] canvas');
+  if (ncv) {
+    const nctx = ncv.getContext('2d', { willReadFrequently: true });
+    const keepN = T3.look, keepNK = T3.lookK;
+    T3.look = 'none'; T3.lookK = 100;
+    geometry(nctx, st.small, 96, 96, 'cover', .5, .5);
+    process(nctx, 96, 96, effective(NEUTRAL, FILTERS[0], 1));
+    px3color(nctx, 96, 96);
+    bloom(nctx, 96, 96, .12);
+    T3.look = keepN; T3.lookK = keepNK;
+  }
   for (const L of LOOKS) {
     const cv = $('#lookChips .fchip[data-id="' + L.id + '"] canvas');
     if (!cv) continue;
@@ -2893,7 +2912,7 @@ function smartRun() {
   p.textContent = 'This looks like ' + s.type + '. The ' + look.name + ' look fits it best.';
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'btn gold smartGo'; b.textContent = 'Apply it';
-  b.addEventListener('click', () => { s.apply(); box.innerHTML = ''; });
+  b.addEventListener('click', () => { s.apply(s.look); box.innerHTML = ''; box.hidden = true; });
   box.appendChild(p); box.appendChild(b);
   box.hidden = false;
 }
